@@ -1,0 +1,42 @@
+[package]
+name = "temporal"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "独立时间值对象与历史可见性规则模块"
+license = "MIT"
+readme = "README.md"
+publish = false
+
+[dependencies]
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1"
+static_assertions = "1"
+serde = { version = "1", features = ["derive"] }
+
+[[bench]]
+name = "primitives"
+harness = false
+
+[[bench]]
+name = "pit_selection"
+harness = false
+
+[lints.rust]
+private_interfaces = "deny"
+private_bounds = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[package.metadata.bytechainx]
+module_id = "temporal"
+owner = "bytechainx"
+role = "type"
+semantic_contract = "spec.md"
