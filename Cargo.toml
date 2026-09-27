@@ -6,6 +6,8 @@ rust-version = "1.88"
 description = "独立时间值对象与历史可见性规则模块"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/bytechainx/temporal"
+documentation = "https://github.com/bytechainx/temporal#readme"
 publish = false
 
 [dependencies]
