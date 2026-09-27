@@ -364,7 +364,7 @@ fn tp_t082_083_withdraw_and_restore_follow_visible_order() {
 }
 
 #[test]
-fn tp_t080_086_089_incomplete_or_cross_fact_inputs_fail_strictly() {
+fn tp_t080_086_incomplete_or_cross_fact_inputs_fail_strictly() {
     let a = version(b"a", b"v1", 1, 10, RevisionOperation::Upsert);
     let b = version(b"b", b"v1", 1, 10, RevisionOperation::Upsert);
     let keys = [a.identity().fact_key(), b.identity().fact_key()];
@@ -411,6 +411,97 @@ fn tp_t080_086_089_incomplete_or_cross_fact_inputs_fail_strictly() {
         ),
         Err(PitError::ContextMismatch)
     ));
+}
+
+#[test]
+fn tp_t057_equal_ordinals_for_distinct_revisions_are_ambiguous() {
+    let first = version(b"order-conflict", b"v1", 1, 10, RevisionOperation::Upsert);
+    let second = version(b"order-conflict", b"v2", 1, 11, RevisionOperation::Upsert);
+    let keys = [first.identity().fact_key()];
+    let ctx = context(
+        20,
+        OutputScope::SingleFact,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    for candidates in [[first, second], [second, first]] {
+        assert!(matches!(
+            select_fact_as_of(
+                &candidates,
+                coverage(&keys, 20, CoverageState::Complete),
+                ctx
+            ),
+            Err(PitError::AmbiguousRevisionOrder)
+        ));
+    }
+}
+
+#[test]
+fn tp_t058_distinct_order_scopes_cannot_compare_ordinals() {
+    let first = version(b"epoch-reset", b"v1", 2, 10, RevisionOperation::Upsert);
+    let second = version(b"epoch-reset", b"v2", 1, 11, RevisionOperation::Upsert);
+    let second = with_order(
+        second,
+        RevisionOrderRef::sequence("epoch2", 1, &limits()).unwrap(),
+        second.source_evidence(),
+    );
+    let keys = [first.identity().fact_key()];
+    let ctx = context(
+        20,
+        OutputScope::SingleFact,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    for candidates in [[first, second], [second, first]] {
+        assert!(matches!(
+            select_fact_as_of(
+                &candidates,
+                coverage(&keys, 20, CoverageState::Complete),
+                ctx
+            ),
+            Err(PitError::IncomparableOrderScope)
+        ));
+    }
+}
+
+#[test]
+fn tp_t089_ambiguous_fact_fails_the_entire_batch() {
+    let good = version(b"a", b"v1", 1, 10, RevisionOperation::Upsert);
+    let first = version(b"b", b"v1", 1, 10, RevisionOperation::Upsert);
+    let second = version(b"b", b"v2", 1, 11, RevisionOperation::Upsert);
+    let good_key = [good.identity().fact_key()];
+    assert!(matches!(
+        select_fact_as_of(
+            &[good],
+            coverage(&good_key, 20, CoverageState::Complete),
+            context(
+                20,
+                OutputScope::SingleFact,
+                RevisionOrderPolicy::AuthoritativeSequence
+            )
+        ),
+        Ok(FactOutcome::Selected { .. })
+    ));
+    let keys = [good.identity().fact_key(), first.identity().fact_key()];
+    let ctx = context(
+        20,
+        OutputScope::AllFacts,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    for candidates in [
+        [good, first, second],
+        [second, good, first],
+        [first, second, good],
+    ] {
+        assert!(matches!(
+            select_facts_as_of(
+                QueryInputRef {
+                    candidates: &candidates,
+                    coverage: coverage(&keys, 20, CoverageState::Complete),
+                },
+                ctx
+            ),
+            Err(PitError::AmbiguousRevisionOrder)
+        ));
+    }
 }
 
 #[test]
