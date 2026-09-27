@@ -21,15 +21,31 @@ fn assertion_version(
     limits: &ResourceLimits,
     snapshot: DatasetSnapshotRef<'static>,
 ) -> FactVersionRef<'static> {
+    assertion_revision(
+        key,
+        (b"v1", 1, 10, RevisionOperation::Upsert),
+        interval,
+        limits,
+        snapshot,
+    )
+}
+
+fn assertion_revision(
+    key: &'static [u8],
+    (revision, ordinal, release, operation): (&'static [u8], u64, i64, RevisionOperation),
+    interval: &'static EffectiveInterval,
+    limits: &ResourceLimits,
+    snapshot: DatasetSnapshotRef<'static>,
+) -> FactVersionRef<'static> {
     let key = FactKeyRef::try_new(key, limits).unwrap();
     let digest = DigestRef::try_new("sha256-v1", key.as_bytes(), limits).unwrap();
-    let revision = RevisionIdRef::try_new(b"v1", limits).unwrap();
+    let revision = RevisionIdRef::try_new(revision, limits).unwrap();
     let identity = FactVersionIdRef::try_new("authority1", key, revision, digest, limits).unwrap();
     let draft = TemporalDraft {
         event_time: TimeField::Unknown,
         observation_time: TimeField::Unknown,
-        publication_time: TimeField::Known(time(10)),
-        received_time: TimeField::Known(time(12)),
+        publication_time: TimeField::Known(time(release)),
+        received_time: TimeField::Known(time(release + 2)),
         revision_time: TimeField::Unknown,
         effective_time: TimeField::Known(interval.start()),
     };
@@ -37,8 +53,8 @@ fn assertion_version(
         draft.validate(TemporalProfile::Announcement).unwrap(),
     ));
     let bounds = TimeBounds::try_new(
-        Some(time(10)),
-        Some(time(10)),
+        Some(time(release)),
+        Some(time(release)),
         TimeQuality::Exact,
         "quality1",
         limits,
@@ -62,10 +78,11 @@ fn assertion_version(
             source_release: SourceReleaseRequirement::Required,
             identity,
             input_provenance_ref: "provenance1",
-            operation: RevisionOperation::Upsert,
-            payload_ref: Some(PayloadRef::try_new("payload1", "v1", limits).unwrap()),
+            operation,
+            payload_ref: (operation == RevisionOperation::Upsert)
+                .then(|| PayloadRef::try_new("payload1", "v1", limits).unwrap()),
             source_temporal: temporal.source_roles(),
-            revision_order: RevisionOrderRef::sequence("order1", 1, limits).unwrap(),
+            revision_order: RevisionOrderRef::sequence("order1", ordinal, limits).unwrap(),
             source_evidence: Some(evidence),
             receipts: &[],
             system_evidence: &[],
@@ -274,4 +291,93 @@ fn tp_t091_092_093_096_097_announced_future_state_uses_half_open_intervals() {
         ),
         Err(PitError::ConflictingEffectiveState)
     ));
+}
+
+#[test]
+fn tp_t099_visible_withdrawal_does_not_revive_old_effective_state() {
+    let limits = ResourceLimits::try_new(128, 8, 8, 16, 8, 8, 8, 8, 65536).unwrap();
+    let snapshot = DatasetSnapshotRef::try_new("s1", "manifest1", "schema1", &limits).unwrap();
+    let policy = QueryPolicy::try_new(
+        TemporalProfile::Announcement,
+        EvidenceAcceptance::ExactOnly,
+        RevisionOrderPolicy::AuthoritativeSequence,
+        OutputScope::AllFacts,
+        "policy1",
+        limits,
+    )
+    .unwrap();
+    let context = |known_at| {
+        AsOfContext::try_new(AsOfContextParts {
+            known_at: time(known_at),
+            knowledge_basis: KnowledgeBasis::SourcePublishedAsOf,
+            authority_scope: "authority1",
+            source_scope: Some("source1"),
+            consumer_boundary: None,
+            dataset_snapshot: snapshot,
+            system_cut: None,
+            policy,
+            fact_schema_ref: "fact1",
+            version_schema_ref: "version1",
+            evidence_schema_ref: "evidence1",
+            interpretation_ref: "interpretation1",
+        })
+        .unwrap()
+    };
+    let interval = Box::leak(Box::new(EffectiveInterval::try_new(time(0), None).unwrap()));
+    let old = assertion_version(b"state-fact", interval, &limits, snapshot);
+    let withdrawn = assertion_revision(
+        b"state-fact",
+        (b"v2", 2, 20, RevisionOperation::Withdraw),
+        interval,
+        &limits,
+        snapshot,
+    );
+    let keys = [old.identity().fact_key()];
+    let assertions = [StateAssertionRef {
+        fact_key: keys[0],
+        state_key: b"state1",
+        interval: *interval,
+    }];
+    for candidates in [[old, withdrawn], [withdrawn, old]] {
+        let evaluate = |known_at| {
+            let coverage = CandidateCoverageRef::try_new(
+                "authority1",
+                &keys,
+                snapshot,
+                KnowledgeBasis::SourcePublishedAsOf,
+                time(known_at),
+                CoverageState::Complete,
+                "coverage1",
+                "adapter1",
+                "accepted1",
+                &limits,
+            )
+            .unwrap();
+            select_effective_state_as_of(
+                EffectiveStateInputRef {
+                    facts: QueryInputRef {
+                        candidates: &candidates,
+                        coverage,
+                    },
+                    assertions: &assertions,
+                    state_key: b"state1",
+                    state_policy_ref: "state-policy1",
+                },
+                context(known_at),
+                time(5),
+                StatePolicy::UniqueNonOverlappingAssertions,
+            )
+        };
+        assert!(matches!(
+            evaluate(15),
+            Ok(EffectiveStateResult::Active {
+                outcome: FactOutcome::Selected { version, .. },
+                ..
+            }) if version.revision_id().as_bytes() == b"v1"
+        ));
+        assert!(matches!(
+            evaluate(25),
+            Ok(EffectiveStateResult::NoActiveState { .. })
+        ));
+    }
 }
