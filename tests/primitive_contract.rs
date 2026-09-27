@@ -96,7 +96,7 @@ fn 负子秒使用欧几里得表示() {
 
 #[test]
 fn 系统时间转换严格无损() {
-    for raw in [0, 1, -1, -1_000_000_001, i64::MAX, i64::MIN] {
+    for raw in [0, 1, -1, -1_000_000_000, -1_000_000_001, i64::MAX, i64::MIN] {
         let value = UnixTimeNs::from_unix_nanos(raw);
         match value.try_into_system_time() {
             Ok(system) => assert_eq!(UnixTimeNs::try_from_system_time(system), Ok(value)),
@@ -110,10 +110,12 @@ fn 系统时间转换严格无损() {
         UnixTimeNs::try_from_system_time(UNIX_EPOCH),
         Ok(UnixTimeNs::UNIX_EPOCH)
     );
-    if let Some(before_epoch) = UNIX_EPOCH.checked_sub(Duration::from_nanos(1)) {
+    if let Some(before_epoch) = UNIX_EPOCH.checked_sub(Duration::from_secs(1))
+        && matches!(UNIX_EPOCH.duration_since(before_epoch), Ok(duration) if duration == Duration::from_secs(1))
+    {
         assert_eq!(
             UnixTimeNs::try_from_system_time(before_epoch),
-            Ok(UnixTimeNs::from_unix_nanos(-1))
+            Ok(UnixTimeNs::from_unix_nanos(-1_000_000_000))
         );
     }
     if let Some(too_late) = UNIX_EPOCH.checked_add(Duration::from_secs(i64::MAX as u64)) {

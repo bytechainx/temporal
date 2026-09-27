@@ -273,11 +273,10 @@ impl<'a> FactVersionRef<'a> {
         if !profile_matches {
             return Err(PitError::ContextMismatch);
         }
-        if let Some(interval) = parts.effective_interval {
-            if !matches!(roles.effective_time(), TimeField::Known(time) if *time == interval.start())
-            {
-                return Err(PitError::ContextMismatch);
-            }
+        if let Some(interval) = parts.effective_interval
+            && !matches!(roles.effective_time(), TimeField::Known(time) if *time == interval.start())
+        {
+            return Err(PitError::ContextMismatch);
         }
         if let SourceReleaseRequirement::NotApplicable {
             authority_profile_contract_ref,
@@ -305,18 +304,17 @@ impl<'a> FactVersionRef<'a> {
             predecessor: Some(previous),
             ..
         } = parts.revision_order
+            && previous == parts.identity.revision_id()
         {
-            if previous == parts.identity.revision_id() {
-                return Err(PitError::InvalidRevisionChain);
-            }
+            return Err(PitError::InvalidRevisionChain);
         }
         if let RevisionOrderRef::AuthoritativeSequence { order_scope, .. } = parts.revision_order {
             checked_label(order_scope, limits.max_identity_bytes())?;
         }
-        if let Some(evidence) = parts.source_evidence {
-            if evidence.version() != parts.identity {
-                return Err(PitError::EvidenceMismatch);
-            }
+        if let Some(evidence) = parts.source_evidence
+            && evidence.version() != parts.identity
+        {
+            return Err(PitError::EvidenceMismatch);
         }
         for receipt in parts.receipts {
             if receipt.version() != parts.identity {
