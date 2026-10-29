@@ -67,7 +67,7 @@ fn sample(revisions: usize) -> Result<u128, Box<dyn Error>> {
         event_time: TimeField::Unknown,
         observation_time: TimeField::Known(ObservationTime::At(at)),
         publication_time: TimeField::Known(UnixTimeNs::from_unix_nanos(0)),
-        received_time: TimeField::Unknown,
+        received_time: TimeField::Known(at),
         revision_time: TimeField::Unknown,
         effective_time: TimeField::Unknown,
     }
