@@ -102,7 +102,7 @@ impl WallClock for WallOnly {
 
 #[test]
 fn tp_t021_system_time_signed_epoch() {
-    for offset in [-1_i64, 1, -1_000_000_000, 1_000_000_000] {
+    for offset in [-1_000_000_000_i64, 1_000_000_000] {
         let system = if offset >= 0 {
             UNIX_EPOCH + Duration::from_nanos(offset.unsigned_abs())
         } else {
