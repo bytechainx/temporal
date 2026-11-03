@@ -1,7 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
 use temporal::{
-    ObservationTime, TemporalDraft, TemporalError, TemporalProfile, TimeField, UnixTimeNs,
+    EffectiveInterval, ObservationTime, TemporalDraft, TemporalError, TemporalProfile, TimeField,
+    UnixTimeNs,
 };
 
 fn time(nanos: i64) -> UnixTimeNs {
@@ -66,6 +67,13 @@ fn tp_t037_future_effective_time_does_not_fail_structure() {
         .validate(TemporalProfile::Announcement)
         .unwrap();
     assert_eq!(validated.effective_time(), &TimeField::Known(time(100)));
+    assert!(matches!(
+        validated.publication_time(),
+        TimeField::Known(published) if *published <= time(20)
+    ));
+    let state_window = EffectiveInterval::try_new(time(100), None).unwrap();
+    assert!(!state_window.contains(time(50)));
+    assert!(state_window.contains(time(100)));
 }
 
 #[test]
@@ -76,7 +84,10 @@ fn tp_t038_derived_record_needs_semantic_anchor() {
         Err(TemporalError::MissingRequiredRole)
     ));
     derived.observation_time = TimeField::Known(ObservationTime::At(time(0)));
-    assert!(derived.validate(TemporalProfile::DerivedRecord).is_ok());
+    let validated = derived.validate(TemporalProfile::DerivedRecord).unwrap();
+    assert_eq!(validated.received_time(), time(10));
+    assert_eq!(validated.publication_time(), &TimeField::Unknown);
+    assert_eq!(validated.event_time(), &TimeField::Unknown);
 }
 
 #[test]
