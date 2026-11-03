@@ -24,6 +24,36 @@
 //! let _: UnixTimeNs = 0_i64.into();
 //! ```
 
+//! 已验证的 Temporal 字段不能从外部直接构造：
+//!
+//! ```compile_fail
+//! use temporal::Temporal;
+//! let _ = Temporal { };
+//! ```
+//!
+//! 内部实现模块不可从外部依赖：
+//!
+//! ```compile_fail
+//! use temporal::unix_time::UnixTimeNs;
+//! ```
+//!
+//! 非穷尽枚举要求外部匹配保留通配分支：
+//!
+//! ```compile_fail
+//! use temporal::TimeError;
+//! fn classify(error: TimeError) -> u8 { match error { TimeError::Overflow => 1 } }
+//! ```
+//!
+//! 只实现墙钟的对象不能当作组合时钟：
+//!
+//! ```compile_fail
+//! use temporal::{RuntimeClock, TimeError, UnixTimeNs, WallClock};
+//! struct WallOnly;
+//! impl WallClock for WallOnly { fn now(&self) -> Result<UnixTimeNs, TimeError> { Ok(UnixTimeNs::UNIX_EPOCH) } }
+//! fn need<T: RuntimeClock>(_: T) {}
+//! need(WallOnly);
+//! ```
+
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![deny(unreachable_pub)]
