@@ -40,5 +40,5 @@ unimplemented = "deny"
 [package.metadata.bytechainx]
 module_id = "temporal"
 owner = "bytechainx"
-role = "type"
+role = "kernel"
 semantic_contract = "spec.md"
