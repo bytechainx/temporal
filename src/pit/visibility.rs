@@ -14,7 +14,7 @@ pub enum DecisionReason {
     ReleaseAfterCutoff,
     /// 系统可读时间晚于截止点。
     SystemAvailableAfterCutoff,
-    /// 可读事件不在历史切片中。
+    /// 事件所在分区已由本次历史切片声明，且事件序号越过该分区的前沿。
     OutsideSystemCut,
     /// 来源时间缺乏证明。
     SourceTimeUnproven,
@@ -26,6 +26,8 @@ pub enum DecisionReason {
     ReceiptUnproven,
     /// 必需来源释放条件缺乏证明。
     ReleaseConditionUnproven,
+    /// 目标消费者的覆盖声明不足，无法判定事件是否属于其历史可读集合。
+    TargetCoverageUnproven,
 }
 
 impl DecisionReason {
@@ -40,6 +42,7 @@ impl DecisionReason {
             Self::PrecisionInsufficient => "PRECISION_INSUFFICIENT",
             Self::ReceiptUnproven => "RECEIPT_UNPROVEN",
             Self::ReleaseConditionUnproven => "RELEASE_CONDITION_UNPROVEN",
+            Self::TargetCoverageUnproven => "TARGET_COVERAGE_UNPROVEN",
         }
     }
 }
@@ -150,10 +153,22 @@ pub fn evaluate_visibility(
     let mut saw_future = false;
     let mut saw_unknown = false;
     let mut saw_unmatched_receipt = false;
+    let mut saw_uncovered = false;
     for &event in version.system_evidence() {
-        if event.consumer_boundary() != boundary || event.log_epoch() != cut.boundary_epoch() {
+        // 三态归属判定：事件不在目标消费者的覆盖声明内时成员关系未知，
+        // 不得把它当作「已排除」。跨越代次的读数同属未覆盖。
+        // 切片的每个声明分区都与 boundary_epoch 同代次，所以分区查找只比较名称。
+        if event.consumer_boundary() != boundary
+            || event.log_epoch() != cut.boundary_epoch()
+            || !cut
+                .partitions()
+                .iter()
+                .any(|part| part.partition() == event.partition())
+        {
+            saw_uncovered = true;
             continue;
         }
+        // 切片已声明该分区：前沿越出才是可证明的排除。
         if !cut.contains(event, boundary, cutoff)? {
             continue;
         }
@@ -215,6 +230,13 @@ pub fn evaluate_visibility(
         ));
     }
     if !saw_in_cut && !version.system_evidence().is_empty() {
+        // 无事件入选时：只有「全部事件都在已声明分区上越过前沿」才构成确定排除；
+        // 存在未覆盖事件时结论只能是 Indeterminate。
+        if saw_uncovered {
+            return Ok(VisibilityDecision::Indeterminate(
+                DecisionReason::TargetCoverageUnproven,
+            ));
+        }
         return Ok(VisibilityDecision::NotVisible(
             DecisionReason::OutsideSystemCut,
         ));
