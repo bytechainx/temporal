@@ -13,7 +13,7 @@ use crate::revision::{
 };
 use crate::revision::{RevisionOrderRef, SourceReleaseRequirement};
 
-/// 选中修订的决策安全证据引用。
+/// 仅含决策安全字段的证据引用。
 #[derive(Debug, Clone, Copy)]
 pub struct SelectedEvidenceRef<'a> {
     /// 来源实际发布证据。
@@ -31,18 +31,18 @@ pub enum FactOutcome<'a> {
     Selected {
         /// 选中的完整版本身份。
         version: FactVersionIdRef<'a>,
-        /// 已验证为新增或更新。
+        /// 调用方声明的操作类型。
         operation: RevisionOperation,
         /// 完整不可变载荷引用。
         payload: PayloadRef<'a>,
-        /// 本次证明可见的证据。
+        /// 本次选择所引用的可见性证据引用。
         evidence: SelectedEvidenceRef<'a>,
     },
     /// 当前可见的最高权威修订是撤回。
     Withdrawn {
         /// 撤回修订身份。
         version: FactVersionIdRef<'a>,
-        /// 本次证明撤回可见的证据。
+        /// 本次选择所引用的撤回可见性证据引用。
         evidence: SelectedEvidenceRef<'a>,
     },
     /// 完整覆盖内没有可见版本；不暴露未来候选。
@@ -54,12 +54,12 @@ pub enum FactOutcome<'a> {
     },
 }
 
-/// 一次批量查询的完整候选与覆盖证明。
+/// 一次批量查询的完整候选与覆盖声明（由适配器声明）。
 #[derive(Debug, Clone, Copy)]
 pub struct QueryInputRef<'a> {
     /// 当前快照中的候选版本。
     pub candidates: &'a [FactVersionRef<'a>],
-    /// 受信适配器的完整覆盖声明。
+    /// 由适配器声明的完整覆盖。
     pub coverage: CandidateCoverageRef<'a>,
 }
 
@@ -68,7 +68,7 @@ pub struct QueryInputRef<'a> {
 pub struct PitResult<'a> {
     /// 每个已声明事实的确定性结果。
     pub outcomes: Vec<FactOutcome<'a>>,
-    /// 决策安全的复现上下文与输入覆盖证明。
+    /// 决策安全的复现上下文与输入覆盖声明引用。
     pub manifest: PitManifestRef<'a>,
 }
 
@@ -77,9 +77,9 @@ pub struct PitResult<'a> {
 pub struct PitManifestRef<'a> {
     /// 包含 snapshot、知识模式、截止点、cut、策略和 schema 的完整上下文。
     pub context: AsOfContext<'a>,
-    /// 受信枚举器的覆盖清单引用。
+    /// 候选枚举器的覆盖清单引用。
     pub coverage_manifest_ref: &'a str,
-    /// 受信适配器身份和版本引用。
+    /// 适配器身份和版本引用；本库不判定其是否受信。
     pub coverage_adapter_ref: &'a str,
     /// 覆盖验收记录引用。
     pub coverage_acceptance_ref: &'a str,
