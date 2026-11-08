@@ -23,9 +23,9 @@ use temporal::{
     EvidenceAcceptance, EvidenceProofRef, FactKeyRef, FactVersionIdRef, FactVersionParts,
     FactVersionRef, KnowledgeBasis, ObservationTime, OutputScope, PayloadRef, QueryPolicy,
     ReceiptEvidenceRef, ResourceLimits, RevisionIdRef, RevisionOperation, RevisionOrderPolicy,
-    RevisionOrderRef, SourceReleaseRequirement, SourceVisibilityEvidenceRef,
-    SystemKnowledgeCutRef, SystemVisibilityEvidenceRef, TemporalDraft, TemporalProfile, TimeBounds,
-    TimeField, TimeQuality, UnixTimeNs, VisibilityDecision, evaluate_visibility,
+    RevisionOrderRef, SourceReleaseRequirement, SourceVisibilityEvidenceRef, SystemKnowledgeCutRef,
+    SystemVisibilityEvidenceRef, TemporalDraft, TemporalProfile, TimeBounds, TimeField,
+    TimeQuality, UnixTimeNs, VisibilityDecision, evaluate_visibility,
 };
 
 const CONSUMER_A: &str = "consumer1";
