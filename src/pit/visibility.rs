@@ -50,11 +50,11 @@ impl DecisionReason {
 /// 单版本判定；原因不含候选身份或载荷。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisibilityDecision {
-    /// 所有必要门禁均得到证明。
+    /// 全部规则门禁已被输入满足。
     Visible,
-    /// 已证明该版本在本次查询不可见。
+    /// 按已接受输入判定为不可见。
     NotVisible(DecisionReason),
-    /// 尚不能证明可见或排除。
+    /// 输入不足以判定可见或排除。
     Indeterminate(DecisionReason),
 }
 
