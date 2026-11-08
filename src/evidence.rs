@@ -246,7 +246,7 @@ impl<'a> ReceiptEvidenceRef<'a> {
     pub const fn received_bounds(self) -> TimeBounds<'a> {
         self.received_bounds
     }
-    /// 受信入口验收记录。
+    /// 外部验收记录引用；本库不验证该记录。
     pub const fn proof(self) -> EvidenceProofRef<'a> {
         self.proof
     }
