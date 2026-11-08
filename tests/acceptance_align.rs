@@ -745,9 +745,11 @@ fn tp_t074_boundary_isolation_no_shared_available_at() {
         interpretation_ref: "interpretation1",
     })
     .unwrap();
+    // Owner 裁决 R2：consumer2 的覆盖声明不含该事件，成员关系未证明，
+    // 结论只能是 Indeterminate，不得推断为确定不可见（WP-01，AUDIT-VALIDATION §2）。
     assert!(matches!(
         evaluate_visibility(sys, other).unwrap(),
-        VisibilityDecision::NotVisible(_)
+        VisibilityDecision::Indeterminate(_)
     ));
 }
 
@@ -782,10 +784,11 @@ fn tp_t075_log_epoch_isolation_no_cross_epoch_ordinal_compare() {
     )
     .unwrap()]));
     let other_epoch = with_system_evidence(base, first.receipts(), events, &limits()).unwrap();
-    // cut 的 boundary_epoch 是 log1；log2 事件被跳过 → 无可见事件 → NotVisible。
+    // Owner 裁决 R2：cut 的 boundary_epoch 是 log1；log2 事件不在该覆盖声明内，
+    // 成员关系未证明 → Indeterminate，不得据此给出确定结论（WP-01）。
     assert!(matches!(
         evaluate_visibility(other_epoch, system_context(20, 1)).unwrap(),
-        VisibilityDecision::NotVisible(DecisionReason::OutsideSystemCut)
+        VisibilityDecision::Indeterminate(_)
     ));
 }
 
@@ -819,9 +822,10 @@ fn tp_t076_multi_partition_cut_needs_completeness_proof() {
     )
     .unwrap()]));
     let part2 = with_system_evidence(base, first.receipts(), events, &limits()).unwrap();
+    // Owner 裁决 R2：cut 只声明 part1，part2 事件的成员关系未证明 → Indeterminate。
     assert!(matches!(
         evaluate_visibility(part2, system_context(20, 1)).unwrap(),
-        VisibilityDecision::NotVisible(_)
+        VisibilityDecision::Indeterminate(_)
     ));
     // 覆盖声明不完整：缺完整性/一致性证明时严格查询失败。
     let key = [part2.identity().fact_key()];
