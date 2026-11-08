@@ -18,7 +18,7 @@ fn label<'a>(value: &'a str, limits: &ResourceLimits) -> Result<&'a str, PitErro
 /// 时间区间的质量说明；`Exact` 要求上下界同一时刻。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeQuality {
-    /// 已证明为同一精确时刻。
+    /// 调用方声明为同一精确时刻。
     Exact,
     /// 单侧或双侧保守时间界限。
     Bounded,
@@ -27,9 +27,9 @@ pub enum TimeQuality {
 /// 截止点相对可用时刻的三态判断。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeDecision {
-    /// 已证明不晚于截止点可用。
+    /// 按已接受输入判定为不晚于截止点可用。
     ProvenByCutoff,
-    /// 已证明晚于截止点才可能可用。
+    /// 按已接受输入判定为晚于截止点才可能可用。
     NotYetVisible,
     /// 时间证据不足或跨越截止点。
     Indeterminate,
@@ -112,7 +112,7 @@ pub struct EvidenceProofRef<'a> {
 }
 
 impl<'a> EvidenceProofRef<'a> {
-    /// 登记受信入口验收结果的稳定引用；任意字符串不自动构成可信证明。
+    /// 构造一个指向外部验收记录的结构引用；本库不登记、不验收、不核验被指向的记录。任意字符串不自动构成可信证明。
     pub fn try_new(
         evidence_id: &'a str,
         schema_version: &'a str,
@@ -185,11 +185,11 @@ impl<'a> SourceVisibilityEvidenceRef<'a> {
     pub const fn source_scope(self) -> &'a str {
         self.source_scope
     }
-    /// 已证明的实际发布界限。
+    /// 适配器声明并已验收的实际发布界限。
     pub const fn bounds(self) -> TimeBounds<'a> {
         self.bounds
     }
-    /// 受信入口验收记录。
+    /// 外部验收记录引用；本库不验证该记录。
     pub const fn proof(self) -> EvidenceProofRef<'a> {
         self.proof
     }
@@ -339,7 +339,7 @@ impl<'a> SystemVisibilityEvidenceRef<'a> {
     pub const fn bounds(self) -> TimeBounds<'a> {
         self.bounds
     }
-    /// 受信入口验收记录。
+    /// 外部验收记录引用；本库不验证该记录。
     pub const fn proof(self) -> EvidenceProofRef<'a> {
         self.proof
     }
@@ -417,7 +417,7 @@ impl<'a> CutPartitionRef<'a> {
     }
 }
 
-/// 历史决策边界固定的可读事件集合证明。
+/// 历史决策边界固定的可读事件集合声明。
 #[derive(Debug, Clone, Copy)]
 pub struct SystemKnowledgeCutRef<'a> {
     boundary_id: &'a str,
@@ -432,7 +432,7 @@ pub struct SystemKnowledgeCutRef<'a> {
 }
 
 impl<'a> SystemKnowledgeCutRef<'a> {
-    /// 检查切片各作用域、证明引用、分区唯一性及资源界限。
+    /// 检查切片各作用域、引用字段、分区唯一性及资源界限。
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         boundary_id: &'a str,
@@ -502,7 +502,7 @@ impl<'a> SystemKnowledgeCutRef<'a> {
     pub const fn known_at(self) -> UnixTimeNs {
         self.known_at
     }
-    /// 截止点绑定证明引用。
+    /// 截止点绑定的外部引用；本库不核验该引用指向的内容。
     pub const fn known_at_binding_ref(self) -> &'a str {
         self.known_at_binding_ref
     }
