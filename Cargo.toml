@@ -8,6 +8,8 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/bytechainx/temporal"
 documentation = "https://github.com/bytechainx/temporal#readme"
+keywords = ["time", "point-in-time", "temporal", "visibility", "punctuality"]
+categories = ["date-and-time", "data-structures"]
 publish = false
 
 [dependencies]
