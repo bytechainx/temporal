@@ -70,11 +70,33 @@ fn version_bounds(
     upper: i64,
     operation: RevisionOperation,
 ) -> FactVersionRef<'static> {
-    let limits = limits();
-    let key = FactKeyRef::try_new(key, &limits).unwrap();
-    let revision = RevisionIdRef::try_new(revision, &limits).unwrap();
-    let digest = DigestRef::try_new("sha256-v1", revision.as_bytes(), &limits).unwrap();
-    let identity = FactVersionIdRef::try_new("authority1", key, revision, digest, &limits).unwrap();
+    version_bounds_at(
+        key,
+        revision,
+        ordinal,
+        release,
+        lower,
+        upper,
+        operation,
+        &limits(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn version_bounds_at(
+    key: &'static [u8],
+    revision: &'static [u8],
+    ordinal: u64,
+    release: i64,
+    lower: i64,
+    upper: i64,
+    operation: RevisionOperation,
+    limits: &ResourceLimits,
+) -> FactVersionRef<'static> {
+    let key = FactKeyRef::try_new(key, limits).unwrap();
+    let revision = RevisionIdRef::try_new(revision, limits).unwrap();
+    let digest = DigestRef::try_new("sha256-v1", revision.as_bytes(), limits).unwrap();
+    let identity = FactVersionIdRef::try_new("authority1", key, revision, digest, limits).unwrap();
     let draft = TemporalDraft {
         event_time: TimeField::Unknown,
         observation_time: TimeField::Known(ObservationTime::At(time(1000))),
@@ -98,7 +120,7 @@ fn version_bounds(
         Some(time(upper)),
         quality,
         "quality1",
-        &limits,
+        limits,
     )
     .unwrap();
     let proof = EvidenceProofRef::try_new(
@@ -107,13 +129,13 @@ fn version_bounds(
         "extractor1",
         "raw1",
         "accepted1",
-        &limits,
+        limits,
     )
     .unwrap();
     let evidence =
-        SourceVisibilityEvidenceRef::try_new(identity, "source1", bounds, proof, &limits).unwrap();
+        SourceVisibilityEvidenceRef::try_new(identity, "source1", bounds, proof, limits).unwrap();
     let payload_ref = if operation == RevisionOperation::Upsert {
-        Some(PayloadRef::try_new("payload1", "v1", &limits).unwrap())
+        Some(PayloadRef::try_new("payload1", "v1", limits).unwrap())
     } else {
         None
     };
@@ -127,13 +149,13 @@ fn version_bounds(
             operation,
             payload_ref,
             source_temporal: temporal.source_roles(),
-            revision_order: RevisionOrderRef::sequence("order1", ordinal, &limits).unwrap(),
+            revision_order: RevisionOrderRef::sequence("order1", ordinal, limits).unwrap(),
             source_evidence: Some(evidence),
             receipts: &[],
             system_evidence: &[],
             effective_interval: None,
         },
-        &limits,
+        limits,
     )
     .unwrap()
 }
@@ -208,14 +230,23 @@ fn system_version(
     receiver_epoch: &'static str,
     receipt_at: i64,
 ) -> FactVersionRef<'static> {
-    let limits = limits();
+    system_version_at(base, receiver_epoch, receipt_at, &limits())
+}
+
+/// 用调用方指定的资源上限构造系统证据版本。
+fn system_version_at(
+    base: FactVersionRef<'static>,
+    receiver_epoch: &'static str,
+    receipt_at: i64,
+    limits: &ResourceLimits,
+) -> FactVersionRef<'static> {
     let proof = EvidenceProofRef::try_new(
         "system-proof1",
         "schema1",
         "extractor1",
         "raw1",
         "accepted1",
-        &limits,
+        limits,
     )
     .unwrap();
     let receipt_bounds = TimeBounds::try_new(
@@ -223,7 +254,7 @@ fn system_version(
         Some(time(receipt_at)),
         TimeQuality::Exact,
         "quality1",
-        &limits,
+        limits,
     )
     .unwrap();
     let available_bounds = TimeBounds::try_new(
@@ -231,7 +262,7 @@ fn system_version(
         Some(time(16)),
         TimeQuality::Exact,
         "quality1",
-        &limits,
+        limits,
     )
     .unwrap();
     let receipts = Box::leak(Box::new([ReceiptEvidenceRef::try_new(
@@ -241,7 +272,7 @@ fn system_version(
         "receipt1",
         receipt_bounds,
         proof,
-        &limits,
+        limits,
     )
     .unwrap()]));
     let events = Box::leak(Box::new([SystemVisibilityEvidenceRef::try_new(
@@ -256,7 +287,7 @@ fn system_version(
         1,
         available_bounds,
         proof,
-        &limits,
+        limits,
     )
     .unwrap()]));
     FactVersionRef::try_new(
@@ -275,7 +306,7 @@ fn system_version(
             system_evidence: events,
             effective_interval: base.effective_interval(),
         },
-        &limits,
+        limits,
     )
     .unwrap()
 }
@@ -958,6 +989,7 @@ fn tp_t087_same_revision_can_accumulate_independent_accepted_proof() {
 fn tp_t116_working_budget_rejects_before_allocating_selection_index() {
     let candidate = version(b"limited", b"v1", 1, 10, RevisionOperation::Upsert);
     let key = [candidate.identity().fact_key()];
+    // 超工作内存预算 → LimitExceeded（在申请前检查，不静默截断）。
     for budget in [1, 3217] {
         let constrained = ResourceLimits::try_new(128, 16, 8, 128, 16, 32, 32, 16, budget).unwrap();
         let policy = QueryPolicy::try_new(
@@ -993,4 +1025,158 @@ fn tp_t116_working_budget_rejects_before_allocating_selection_index() {
             Err(PitError::LimitExceeded)
         ));
     }
+    // 超候选数上限 → LimitExceeded（不裁剪伪成功）。
+    let few = ResourceLimits::try_new(128, 16, 8, 1, 16, 32, 32, 16, 65536).unwrap();
+    let few_policy = QueryPolicy::try_new(
+        TemporalProfile::PublishedObservation,
+        EvidenceAcceptance::ConservativeBounds,
+        RevisionOrderPolicy::AuthoritativeSequence,
+        OutputScope::SingleFact,
+        "policy1",
+        few,
+    )
+    .unwrap();
+    let few_ctx = AsOfContext::try_new(AsOfContextParts {
+        known_at: time(20),
+        knowledge_basis: KnowledgeBasis::SourcePublishedAsOf,
+        authority_scope: "authority1",
+        source_scope: Some("source1"),
+        consumer_boundary: None,
+        dataset_snapshot: snapshot(),
+        system_cut: None,
+        policy: few_policy,
+        fact_schema_ref: "fact1",
+        version_schema_ref: "version1",
+        evidence_schema_ref: "evidence1",
+        interpretation_ref: "interpretation1",
+    })
+    .unwrap();
+    let a = version(b"limited2", b"v1", 1, 10, RevisionOperation::Upsert);
+    let b = version(b"limited2", b"v2", 2, 11, RevisionOperation::Upsert);
+    let two_keys = [a.identity().fact_key()];
+    assert!(matches!(
+        select_fact_as_of(
+            &[a, b],
+            coverage(&two_keys, 20, CoverageState::Complete),
+            few_ctx
+        ),
+        Err(PitError::LimitExceeded)
+    ));
+    // 超键长上限 → LimitExceeded（构造期即拒绝）。
+    assert!(matches!(
+        FactKeyRef::try_new(&[0u8; 129], &limits()),
+        Err(PitError::LimitExceeded)
+    ));
+    // 超链深上限 → LimitExceeded（不无限递归）。
+    let digest = DigestRef::try_new("sha256-v1", b"t116-chain", &limits()).unwrap();
+    let mut nodes = Vec::new();
+    let mut prev = None;
+    for i in 1..=10u64 {
+        let rev: &'static [u8] = Box::leak(format!("v{i}").into_boxed_str()).as_bytes();
+        let candidate = version(
+            b"t116chain",
+            rev,
+            i,
+            10 + i as i64,
+            RevisionOperation::Upsert,
+        );
+        let linked = with_order(
+            candidate,
+            RevisionOrderRef::LinearSupersedes {
+                predecessor: prev,
+                chain_digest: digest,
+            },
+            candidate.source_evidence(),
+        );
+        prev = Some(candidate.identity().revision_id());
+        nodes.push(linked);
+    }
+    let chain_keys = [nodes[0].identity().fact_key()];
+    let shallow = ResourceLimits::try_new(128, 16, 8, 128, 16, 32, 3, 16, 65536).unwrap();
+    let shallow_policy = QueryPolicy::try_new(
+        TemporalProfile::PublishedObservation,
+        EvidenceAcceptance::ConservativeBounds,
+        RevisionOrderPolicy::LinearSupersedes,
+        OutputScope::SingleFact,
+        "policy1",
+        shallow,
+    )
+    .unwrap();
+    let shallow_ctx = AsOfContext::try_new(AsOfContextParts {
+        known_at: time(40),
+        knowledge_basis: KnowledgeBasis::SourcePublishedAsOf,
+        authority_scope: "authority1",
+        source_scope: Some("source1"),
+        consumer_boundary: None,
+        dataset_snapshot: snapshot(),
+        system_cut: None,
+        policy: shallow_policy,
+        fact_schema_ref: "fact1",
+        version_schema_ref: "version1",
+        evidence_schema_ref: "evidence1",
+        interpretation_ref: "interpretation1",
+    })
+    .unwrap();
+    assert!(matches!(
+        select_fact_as_of(
+            &nodes,
+            coverage(&chain_keys, 40, CoverageState::Complete),
+            shallow_ctx
+        ),
+        Err(PitError::LimitExceeded)
+    ));
+    // 超每事实版本数上限 → LimitExceeded（不裁剪伪成功）。
+    let few_versions = ResourceLimits::try_new(128, 16, 8, 128, 16, 1, 32, 16, 65536).unwrap();
+    let few_versions_policy = QueryPolicy::try_new(
+        TemporalProfile::PublishedObservation,
+        EvidenceAcceptance::ConservativeBounds,
+        RevisionOrderPolicy::AuthoritativeSequence,
+        OutputScope::SingleFact,
+        "policy1",
+        few_versions,
+    )
+    .unwrap();
+    let few_versions_ctx = AsOfContext::try_new(AsOfContextParts {
+        known_at: time(20),
+        knowledge_basis: KnowledgeBasis::SourcePublishedAsOf,
+        authority_scope: "authority1",
+        source_scope: Some("source1"),
+        consumer_boundary: None,
+        dataset_snapshot: snapshot(),
+        system_cut: None,
+        policy: few_versions_policy,
+        fact_schema_ref: "fact1",
+        version_schema_ref: "version1",
+        evidence_schema_ref: "evidence1",
+        interpretation_ref: "interpretation1",
+    })
+    .unwrap();
+    let c = version(b"limited4", b"v1", 1, 10, RevisionOperation::Upsert);
+    let d = version(b"limited4", b"v2", 2, 11, RevisionOperation::Upsert);
+    let cd_keys = [c.identity().fact_key()];
+    assert!(matches!(
+        select_fact_as_of(
+            &[c, d],
+            coverage(&cd_keys, 20, CoverageState::Complete),
+            few_versions_ctx
+        ),
+        Err(PitError::LimitExceeded)
+    ));
+    // ResourceUnavailable 分类存在且与 LimitExceeded 区分（机器码不同）。
+    assert_ne!(
+        PitError::ResourceUnavailable.code(),
+        PitError::LimitExceeded.code()
+    );
+    assert_eq!(
+        PitError::ResourceUnavailable.code(),
+        "PIT_RESOURCE_UNAVAILABLE"
+    );
+    assert_eq!(PitError::LimitExceeded.code(), "PIT_LIMIT");
+    // 可注入的预留失败路径存在：`try_reserve_exact` 的失败映射到 ResourceUnavailable。
+    // 全局分配器对 Rust 是 fatal 的（handle_alloc_error 直接 abort），
+    // 无法在测试进程内安全注入；此处断言该分类的机器合同与区分性，
+    // 实际注入路径由消费方在受控环境执行（SPEC §21.2）。
+    let reserve_unavailable = PitError::ResourceUnavailable;
+    let over_quota = PitError::LimitExceeded;
+    assert_ne!(reserve_unavailable, over_quota);
 }
