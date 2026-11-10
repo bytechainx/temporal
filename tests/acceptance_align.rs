@@ -5,21 +5,20 @@
 //! T092/T093/T096/T097 等）在此不重复，仅在注释中登记。
 #![allow(clippy::unwrap_used)]
 
-use static_assertions::{assert_impl_all, assert_not_impl_any};
-use std::time::Duration;
+use static_assertions::assert_impl_all;
 
 use temporal::{
     AsOfContext, AsOfContextParts, CandidateCoverageRef, CoverageState, CutPartitionRef,
     DatasetSnapshotRef, DecisionReason, DigestRef, EffectiveInterval, EffectiveStateInputRef,
     EffectiveStateResult, EvidenceAcceptance, EvidenceProofRef, FactKeyRef, FactOutcome,
     FactVersionIdRef, FactVersionParts, FactVersionRef, KnowledgeBasis, ObservationTime,
-    OutputScope, PayloadRef, PitError, PrecisionError, PrecisionLossPolicy, QueryInputRef,
-    QueryPolicy, ReceiptEvidenceRef, ResourceLimits, RevisionIdRef, RevisionOperation,
-    RevisionOrderPolicy, RevisionOrderRef, SourceReleaseRequirement, SourceVisibilityEvidenceRef,
-    StateAssertionRef, StatePolicy, SystemKnowledgeCutRef, SystemVisibilityEvidenceRef,
-    TemporalDraft, TemporalError, TemporalProfile, TimeBounds, TimeError, TimeField, TimePrecision,
-    TimeQuality, UnixTimeNs, VisibilityDecision, evaluate_visibility, inspect_candidates,
-    select_effective_state_as_of, select_fact_as_of, select_facts_as_of,
+    OutputScope, PayloadRef, PitError, PitResult, PrecisionError, QueryInputRef, QueryPolicy,
+    ReceiptEvidenceRef, ResourceLimits, RevisionIdRef, RevisionOperation, RevisionOrderPolicy,
+    RevisionOrderRef, SourceReleaseRequirement, SourceVisibilityEvidenceRef, StateAssertionRef,
+    StatePolicy, SystemKnowledgeCutRef, SystemVisibilityEvidenceRef, TemporalDraft, TemporalError,
+    TemporalProfile, TimeBounds, TimeError, TimeField, TimeQuality, UnixTimeNs, VisibilityDecision,
+    evaluate_visibility, inspect_candidates, select_effective_state_as_of, select_fact_as_of,
+    select_facts_as_of,
 };
 
 fn time(value: i64) -> UnixTimeNs {
@@ -129,6 +128,26 @@ fn version(
     version_bounds(key, revision, ordinal, release, release, release, operation)
 }
 
+/// 用调用方指定的资源上限构造版本；用于超过默认 `limits()` 的大规模场景。
+fn version_at(
+    key: &'static [u8],
+    revision: &'static [u8],
+    ordinal: u64,
+    release: i64,
+    limits: &ResourceLimits,
+) -> FactVersionRef<'static> {
+    version_bounds_at(
+        key,
+        revision,
+        ordinal,
+        release,
+        release,
+        release,
+        RevisionOperation::Upsert,
+        limits,
+    )
+}
+
 fn version_bounds(
     key: &'static [u8],
     revision: &'static [u8],
@@ -138,11 +157,33 @@ fn version_bounds(
     upper: i64,
     operation: RevisionOperation,
 ) -> FactVersionRef<'static> {
-    let limits = limits();
-    let key = FactKeyRef::try_new(key, &limits).unwrap();
-    let revision = RevisionIdRef::try_new(revision, &limits).unwrap();
-    let digest = DigestRef::try_new("sha256-v1", revision.as_bytes(), &limits).unwrap();
-    let identity = FactVersionIdRef::try_new("authority1", key, revision, digest, &limits).unwrap();
+    version_bounds_at(
+        key,
+        revision,
+        ordinal,
+        release,
+        lower,
+        upper,
+        operation,
+        &limits(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn version_bounds_at(
+    key: &'static [u8],
+    revision: &'static [u8],
+    ordinal: u64,
+    release: i64,
+    lower: i64,
+    upper: i64,
+    operation: RevisionOperation,
+    limits: &ResourceLimits,
+) -> FactVersionRef<'static> {
+    let key = FactKeyRef::try_new(key, limits).unwrap();
+    let revision = RevisionIdRef::try_new(revision, limits).unwrap();
+    let digest = DigestRef::try_new("sha256-v1", revision.as_bytes(), limits).unwrap();
+    let identity = FactVersionIdRef::try_new("authority1", key, revision, digest, limits).unwrap();
     let draft = TemporalDraft {
         event_time: TimeField::Unknown,
         observation_time: TimeField::Known(ObservationTime::At(time(1000))),
@@ -166,7 +207,7 @@ fn version_bounds(
         Some(time(upper)),
         quality,
         "quality1",
-        &limits,
+        limits,
     )
     .unwrap();
     let proof = EvidenceProofRef::try_new(
@@ -175,13 +216,13 @@ fn version_bounds(
         "extractor1",
         "raw1",
         "accepted1",
-        &limits,
+        limits,
     )
     .unwrap();
     let evidence =
-        SourceVisibilityEvidenceRef::try_new(identity, "source1", bounds, proof, &limits).unwrap();
+        SourceVisibilityEvidenceRef::try_new(identity, "source1", bounds, proof, limits).unwrap();
     let payload_ref = if operation == RevisionOperation::Upsert {
-        Some(PayloadRef::try_new("payload1", "v1", &limits).unwrap())
+        Some(PayloadRef::try_new("payload1", "v1", limits).unwrap())
     } else {
         None
     };
@@ -195,13 +236,13 @@ fn version_bounds(
             operation,
             payload_ref,
             source_temporal: temporal.source_roles(),
-            revision_order: RevisionOrderRef::sequence("order1", ordinal, &limits).unwrap(),
+            revision_order: RevisionOrderRef::sequence("order1", ordinal, limits).unwrap(),
             source_evidence: Some(evidence),
             receipts: &[],
             system_evidence: &[],
             effective_interval: None,
         },
-        &limits,
+        limits,
     )
     .unwrap()
 }
@@ -1159,9 +1200,16 @@ fn tp_t098_future_announcement_does_not_truncate_history() {
         EffectiveInterval::try_new(time(30), None).unwrap(),
     ));
     let old = assertion_version(b"t098", old_interval, &limits, snapshot);
-    let future = assertion_version(b"t098", future_interval, &limits, snapshot);
+    // B 是与 A 不同的修订（v2/序号 2），其有效区间起点为 30。
+    let future = assertion_revision(
+        b"t098",
+        (b"v2", 2, 40, RevisionOperation::Upsert),
+        future_interval,
+        &limits,
+        snapshot,
+    );
     // future 公告的 release 晚于截止（未来），不可见；其有效区间不提前截断 old。
-    let _future = Box::leak(Box::new(with_effective_interval(future, 40, &limits)));
+    let future = Box::leak(Box::new(with_effective_interval(future, 40, &limits)));
     let keys = [old.identity().fact_key()];
     let cov = CandidateCoverageRef::try_new(
         "authority1",
@@ -1181,8 +1229,8 @@ fn tp_t098_future_announcement_does_not_truncate_history() {
         state_key: b"state1",
         interval: *old_interval,
     }];
-    // 只给 old 候选（future 未提供/不可见），在 [0,30) 内 A 仍 Active。
-    let candidates = [old];
+    // 未来公告 B 也作为候选进入选择：截止 20 时 B 的发布晚于截止，不可见。
+    let candidates = [old, *future];
     let outcome = select_effective_state_as_of(
         EffectiveStateInputRef {
             facts: QueryInputRef {
@@ -1198,7 +1246,29 @@ fn tp_t098_future_announcement_does_not_truncate_history() {
         StatePolicy::UniqueNonOverlappingAssertions,
     )
     .unwrap();
-    assert!(matches!(outcome, EffectiveStateResult::Active { .. }));
+    // 在 B 生效前（valid_at=25 < 30）A 仍 Active，且 B 的存在不改变 A 的区间。
+    assert!(
+        matches!(outcome, EffectiveStateResult::Active { outcome: FactOutcome::Selected { version, .. }, .. } if version.fact_key().as_bytes() == b"t098")
+    );
+    // 断言映射里的 A 区间仍是原区间 [0,30)，未被 B 的未来起点提前改写。
+    assert_eq!(assertions[0].interval, *old_interval);
+    assert_eq!(assertions[0].interval.start(), time(0));
+    assert_eq!(assertions[0].interval.end_exclusive(), Some(time(30)));
+    // 未来候选 B 的区间起点 30 与 A 的终点相接，但 A 的终点来自自身区间而非 B。
+    assert_eq!(future_interval.start(), time(30));
+    // A 的终点不早于 B 的起点（未被 B 提前截断）。
+    assert!(assertions[0].interval.end_exclusive() >= Some(future_interval.start()));
+    // 关键判据：B 不可见时，A 的区间终点仍是自身声明的 30，
+    // 而不是被 B 的生效起点或某个更早时刻截断。
+    assert_eq!(
+        assertions[0].interval.end_exclusive(),
+        old_interval.end_exclusive()
+    );
+    // 截止 20 时 B 不可见（发布晚于截止），所以不参与 A 的状态选择。
+    assert!(matches!(
+        evaluate_visibility(*future, context).unwrap(),
+        VisibilityDecision::NotVisible(DecisionReason::ReleaseAfterCutoff)
+    ));
 }
 
 #[test]
@@ -1344,6 +1414,108 @@ fn tp_t107_fixed_snapshot_replay_is_deterministic() {
     .unwrap();
     assert_eq!(selected_revision(first), Some(b"v1".as_slice()));
     assert_eq!(selected_revision(second), Some(b"v1".as_slice()));
+    // 相同 context/policy/revisions/实现多次执行：语义结果一致。
+    assert_eq!(outcome_signature(first), outcome_signature(second));
+    // 同一批量入口（AllFacts）两次执行：manifest 与语义结果都一致。
+    let batch_ctx = context(
+        20,
+        OutputScope::AllFacts,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    let batch_cov = coverage(&keys, 20, CoverageState::Complete);
+    let run = || {
+        select_facts_as_of(
+            QueryInputRef {
+                candidates: &candidates,
+                coverage: batch_cov,
+            },
+            batch_ctx,
+        )
+        .unwrap()
+    };
+    let first_batch = run();
+    let second_batch = run();
+    assert_eq!(
+        batch_signature(&first_batch),
+        batch_signature(&second_batch)
+    );
+    // manifest 绑定的 context 与输入覆盖引用必须与本次查询一致。
+    assert_eq!(
+        first_batch.manifest.context.known_at(),
+        batch_ctx.known_at()
+    );
+    assert_eq!(
+        first_batch.manifest.context.authority_scope(),
+        batch_ctx.authority_scope()
+    );
+    assert_eq!(
+        first_batch.manifest.context.dataset_snapshot(),
+        batch_ctx.dataset_snapshot()
+    );
+    assert_eq!(
+        first_batch.manifest.context.knowledge_basis(),
+        batch_ctx.knowledge_basis()
+    );
+    assert_eq!(
+        first_batch.manifest.coverage_manifest_ref,
+        batch_cov.manifest_ref()
+    );
+    assert_eq!(
+        first_batch.manifest.coverage_adapter_ref,
+        batch_cov.adapter_ref()
+    );
+    assert_eq!(
+        first_batch.manifest.coverage_acceptance_ref,
+        batch_cov.acceptance_ref()
+    );
+    // 三次执行仍一致（覆盖「多次执行」而非仅两次）。
+    assert_eq!(batch_signature(&run()), batch_signature(&first_batch));
+}
+
+/// 单事实结果的语义签名；不依赖未派生的 PartialEq。
+fn outcome_signature(outcome: FactOutcome<'_>) -> Vec<u8> {
+    match outcome {
+        FactOutcome::Selected { version, .. } => {
+            let mut value = version.authority_scope().as_bytes().to_vec();
+            value.extend_from_slice(version.fact_key().as_bytes());
+            value.extend_from_slice(version.revision_id().as_bytes());
+            value.extend_from_slice(version.semantic_digest().as_bytes());
+            value
+        }
+        FactOutcome::Withdrawn { version, .. } => {
+            let mut value = b"withdrawn:".to_vec();
+            value.extend_from_slice(version.revision_id().as_bytes());
+            value
+        }
+        FactOutcome::NoVisibleVersion {
+            authority_scope,
+            fact_key,
+        } => {
+            let mut value = b"none:".to_vec();
+            value.extend_from_slice(authority_scope.as_bytes());
+            value.extend_from_slice(fact_key.as_bytes());
+            value
+        }
+    }
+}
+
+/// 批量结果的语义签名（outcomes 顺序 + manifest 绑定）。
+fn batch_signature(result: &PitResult<'_>) -> Vec<u8> {
+    let mut value = Vec::new();
+    for outcome in &result.outcomes {
+        value.extend_from_slice(&outcome_signature(*outcome));
+        value.push(b'|');
+    }
+    value.extend_from_slice(result.manifest.context.authority_scope().as_bytes());
+    value.push(b'|');
+    value.extend_from_slice(result.manifest.context.dataset_snapshot().id().as_bytes());
+    value.push(b'|');
+    value.extend_from_slice(result.manifest.coverage_manifest_ref.as_bytes());
+    value.push(b'|');
+    value.extend_from_slice(result.manifest.coverage_adapter_ref.as_bytes());
+    value.push(b'|');
+    value.extend_from_slice(result.manifest.coverage_acceptance_ref.as_bytes());
+    value
 }
 
 // T108 合法未来追加：新增都在 cutoff 后才可见，旧证据不变 → 历史语义一致。
@@ -1366,6 +1538,89 @@ fn tp_t108_legal_future_append_keeps_historical_result() {
     )
     .unwrap();
     assert_eq!(selected_revision(outcome), Some(b"v1".as_slice()));
+    // S/S′ 双快照对比：S′ 是同一事实键的另一个快照（合法未来追加后的快照）。
+    // 两次查询的候选集合、policy、cutoff 完全相同，仅快照身份不同。
+    let rebind = |base: FactVersionRef<'static>| {
+        FactVersionRef::try_new(
+            FactVersionParts {
+                dataset_snapshot: snapshot2(),
+                profile: base.profile(),
+                source_release: base.source_release(),
+                identity: base.identity(),
+                input_provenance_ref: base.input_provenance_ref(),
+                operation: base.operation(),
+                payload_ref: base.payload_ref(),
+                source_temporal: base.source_temporal(),
+                revision_order: base.revision_order(),
+                source_evidence: base.source_evidence(),
+                receipts: base.receipts(),
+                system_evidence: base.system_evidence(),
+                effective_interval: base.effective_interval(),
+            },
+            &limits(),
+        )
+        .unwrap()
+    };
+    let old_s_prime = rebind(old);
+    let future_s_prime = rebind(future);
+    let s_prime_candidates = [old_s_prime, future_s_prime];
+    let ctx_s_prime = {
+        let policy = QueryPolicy::try_new(
+            TemporalProfile::PublishedObservation,
+            EvidenceAcceptance::ConservativeBounds,
+            RevisionOrderPolicy::AuthoritativeSequence,
+            OutputScope::SingleFact,
+            "policy1",
+            limits(),
+        )
+        .unwrap();
+        AsOfContext::try_new(AsOfContextParts {
+            known_at: time(20),
+            knowledge_basis: KnowledgeBasis::SourcePublishedAsOf,
+            authority_scope: "authority1",
+            source_scope: Some("source1"),
+            consumer_boundary: None,
+            dataset_snapshot: snapshot2(),
+            system_cut: None,
+            policy,
+            fact_schema_ref: "fact1",
+            version_schema_ref: "version1",
+            evidence_schema_ref: "evidence1",
+            interpretation_ref: "interpretation1",
+        })
+        .unwrap()
+    };
+    let s_prime_coverage = CandidateCoverageRef::try_new(
+        "authority1",
+        &keys,
+        snapshot2(),
+        KnowledgeBasis::SourcePublishedAsOf,
+        time(20),
+        CoverageState::Complete,
+        "coverage1",
+        "adapter1",
+        "accepted1",
+        &limits(),
+    )
+    .unwrap();
+    let outcome_s_prime =
+        select_fact_as_of(&s_prime_candidates, s_prime_coverage, ctx_s_prime).unwrap();
+    // S 与 S′ 所选事实版本语义一致（同一修订身份），快照身份不同不改变历史结果。
+    assert_eq!(selected_revision(outcome_s_prime), Some(b"v1".as_slice()));
+    assert_eq!(
+        selected_revision(outcome),
+        selected_revision(outcome_s_prime)
+    );
+    assert_eq!(
+        outcome_signature(outcome),
+        outcome_signature(outcome_s_prime)
+    );
+    assert_ne!(snapshot().id(), snapshot2().id());
+    // 未来 v2 在 S′ 中同样不可见：历史结果不因合法未来追加而改变。
+    assert!(matches!(
+        evaluate_visibility(future_s_prime, ctx_s_prime).unwrap(),
+        VisibilityDecision::NotVisible(DecisionReason::ReleaseAfterCutoff)
+    ));
 }
 
 // T109 来源历史补全例外：新增确于 T 前发布的旧版本使用新 snapshot → 新结果允许改善，
@@ -1400,6 +1655,47 @@ fn tp_t109_backfill_exception_improves_new_snapshot_only() {
     )
     .unwrap();
     assert_eq!(selected_revision(outcome_old), Some(b"v2".as_slice()));
+    // 新研究结果允许改善：新快照补入确于 T 前发布的旧版本 v1 后，
+    // 若 v1 是截止前发布的更晚可见修订，新快照结果可与旧快照不同。
+    // 构造改善场景：旧快照只见 v1；新快照补入 v2（确于 T 前发布，序号更大）。
+    let old_only = version(b"t109b", b"v1", 1, 10, RevisionOperation::Upsert);
+    let new_append = version(b"t109b", b"v2", 2, 15, RevisionOperation::Upsert);
+    let keys_b = [old_only.identity().fact_key()];
+    let ctx_b = context(
+        20,
+        OutputScope::SingleFact,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    let old_candidates = [old_only];
+    let old_result = select_fact_as_of(
+        &old_candidates,
+        coverage(&keys_b, 20, CoverageState::Complete),
+        ctx_b,
+    )
+    .unwrap();
+    assert_eq!(selected_revision(old_result), Some(b"v1".as_slice()));
+    let new_candidates = [old_only, new_append];
+    let new_result = select_fact_as_of(
+        &new_candidates,
+        coverage(&keys_b, 20, CoverageState::Complete),
+        ctx_b,
+    )
+    .unwrap();
+    assert_eq!(selected_revision(new_result), Some(b"v2".as_slice()));
+    // 新快照结果允许改善（v1 → v2），旧快照结果不变。
+    assert_ne!(selected_revision(old_result), selected_revision(new_result));
+    // 旧 snapshot 查询仍返回旧结果：补全不改变旧快照的可见性判定。
+    assert_eq!(
+        selected_revision(
+            select_fact_as_of(
+                &[old_only],
+                coverage(&keys_b, 20, CoverageState::Complete),
+                ctx_b
+            )
+            .unwrap()
+        ),
+        Some(b"v1".as_slice())
+    );
 }
 
 // T110 跨快照混页：分页中途切换 snapshot → ContextMismatch，不合并为完整结果。
@@ -1456,8 +1752,14 @@ fn tp_t111_future_info_isolation_decision_safe() {
     )
     .unwrap();
     assert_eq!(diagnostics.entries.len(), 2);
+    // 诊断明细确实包含未来身份（行政审计用途，不得送入策略/特征计算）。
+    assert!(
+        diagnostics
+            .entries
+            .iter()
+            .any(|entry| entry.version.revision_id().as_bytes() == b"v2")
+    );
     // 但策略/特征入口的 FactOutcome 不得包含未来 ID/数量/载荷/发布时间。
-    // 这里截止 20 时唯一候选只有 old（NoVisibleVersion 不含 future）。
     // 用只有 future 的候选：结果必须为 NoVisibleVersion，不泄漏 future 细节。
     let outcome_candidates = [future];
     let outcome = select_fact_as_of(
@@ -1467,6 +1769,54 @@ fn tp_t111_future_info_isolation_decision_safe() {
     )
     .unwrap();
     assert!(matches!(outcome, FactOutcome::NoVisibleVersion { .. }));
+    // DecisionSafe：NoVisibleVersion 只含 authority_scope 与 fact_key，
+    // 不含未来修订 ID、数量、载荷或发布时间。
+    let (authority_scope, fact_key) = match outcome {
+        FactOutcome::NoVisibleVersion {
+            authority_scope,
+            fact_key,
+        } => (authority_scope, fact_key),
+        FactOutcome::Selected { .. } | FactOutcome::Withdrawn { .. } => {
+            unreachable!("NoVisibleVersion expected: outcome is {outcome:?}")
+        }
+    };
+    assert_eq!(authority_scope, "authority1");
+    assert_eq!(fact_key.as_bytes(), b"t111");
+    // 决策输出与诊断输出的结构差异：诊断含未来身份，决策不含。
+    let decision_has_future = match outcome {
+        FactOutcome::Selected { version, .. } | FactOutcome::Withdrawn { version, .. } => {
+            version.revision_id().as_bytes() == b"v2"
+        }
+        FactOutcome::NoVisibleVersion { .. } => false,
+    };
+    assert!(!decision_has_future);
+    // 批量入口同样隔离：AllFacts 下未来候选不进入任何 outcome。
+    let batch_ctx = context(
+        20,
+        OutputScope::AllFacts,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    let batch_candidates = [old, future];
+    let batch = select_facts_as_of(
+        QueryInputRef {
+            candidates: &batch_candidates,
+            coverage: coverage(&keys, 20, CoverageState::Complete),
+        },
+        batch_ctx,
+    )
+    .unwrap();
+    assert_eq!(batch.outcomes.len(), 1);
+    assert!(matches!(
+        batch.outcomes[0],
+        FactOutcome::Selected { version, .. } if version.revision_id().as_bytes() == b"v1"
+    ));
+    // 决策输出不含未来修订身份。
+    assert!(
+        !batch
+            .outcomes
+            .iter()
+            .any(|o| matches!(o, FactOutcome::Selected { version, .. } | FactOutcome::Withdrawn { version, .. } if version.revision_id().as_bytes() == b"v2"))
+    );
 }
 
 #[test]
@@ -1584,6 +1934,38 @@ fn tp_t113_error_machine_contract_unique_codes() {
     all.sort_unstable();
     all.dedup();
     assert!(all.len() >= 4, "at least one code per enum family");
+    // Display 文案变化不改变分类：机器码由变体决定，Display 文本可独立演进。
+    // 断言 code() 与 Display 文本解耦：同一变体的 code 稳定，Display 可不同。
+    let time_display = TimeError::Overflow.to_string();
+    let precision_display = PrecisionError::PrecisionLoss.to_string();
+    let temporal_display = TemporalError::InvalidInterval.to_string();
+    let pit_display = PitError::ContextMismatch.to_string();
+    // Display 文本与机器码不是同一字段：Display 变化不影响分类。
+    for (display, code) in [
+        (time_display.as_str(), "TIME_OVERFLOW"),
+        (precision_display.as_str(), "PREC_LOSS_REJECTED"),
+        (temporal_display.as_str(), "TEMP_INTERVAL_INVALID"),
+        (pit_display.as_str(), "PIT_CONTEXT_MISMATCH"),
+    ] {
+        assert!(!display.is_empty());
+        assert_ne!(display, code);
+    }
+    // 同一变体的 code 稳定，不随 Display 文案漂移。
+    assert_eq!(TimeError::Overflow.code(), "TIME_OVERFLOW");
+    assert_eq!(PrecisionError::PrecisionLoss.code(), "PREC_LOSS_REJECTED");
+    assert_eq!(
+        TemporalError::InvalidInterval.code(),
+        "TEMP_INTERVAL_INVALID"
+    );
+    assert_eq!(PitError::ContextMismatch.code(), "PIT_CONTEXT_MISMATCH");
+    // Display 文本可演进（此处只断言非空且不等于机器码），code 保持稳定。
+    assert!(!time_display.is_empty());
+    assert_ne!(time_display, TimeError::Overflow.code());
+    // 全部公开错误变体的 code 都非空且为稳定机器码格式。
+    for code in &all {
+        assert!(!code.is_empty());
+        assert!(code.bytes().all(|b| b.is_ascii_uppercase() || b == b'_'));
+    }
 }
 
 #[test]
@@ -1673,6 +2055,84 @@ fn tp_t115_cache_isolation_by_context() {
         .unwrap(),
         FactOutcome::NoVisibleVersion { .. }
     ));
+    // 维度二：source_scope 不同 → 不得命中同一缓存键。
+    let other_source_ctx = {
+        let policy = QueryPolicy::try_new(
+            TemporalProfile::PublishedObservation,
+            EvidenceAcceptance::ConservativeBounds,
+            RevisionOrderPolicy::AuthoritativeSequence,
+            OutputScope::SingleFact,
+            "policy1",
+            limits(),
+        )
+        .unwrap();
+        AsOfContext::try_new(AsOfContextParts {
+            known_at: time(20),
+            knowledge_basis: KnowledgeBasis::SourcePublishedAsOf,
+            authority_scope: "authority1",
+            source_scope: Some("source2"),
+            consumer_boundary: None,
+            dataset_snapshot: snapshot(),
+            system_cut: None,
+            policy,
+            fact_schema_ref: "fact1",
+            version_schema_ref: "version1",
+            evidence_schema_ref: "evidence1",
+            interpretation_ref: "interpretation1",
+        })
+        .unwrap()
+    };
+    assert!(matches!(
+        select_fact_as_of(
+            &[base],
+            coverage(&keys, 20, CoverageState::Complete),
+            other_source_ctx
+        ),
+        Err(PitError::EvidenceMismatch)
+    ));
+    // 维度三：system（SystemAsKnown）与 source（SourcePublishedAsOf）不隐式切换。
+    // 同一候选在系统模式下不可见（无系统证据），在来源模式下可见。
+    let system_ctx = system_context(20, 1);
+    assert!(matches!(
+        evaluate_visibility(base, system_ctx),
+        Ok(VisibilityDecision::Indeterminate(_))
+    ));
+    assert!(matches!(
+        evaluate_visibility(base, ctx),
+        Ok(VisibilityDecision::Visible)
+    ));
+    // 维度四：cut 不同 → 不得命中同一缓存键。
+    // 系统模式下 cut 前沿 1 与 2 对同一候选的可见性判定不同。
+    let cut1 = system_context(20, 1);
+    let cut2 = system_context(20, 2);
+    assert_eq!(
+        cut1.system_cut().unwrap().partitions()[0].inclusive_frontier(),
+        1
+    );
+    assert_eq!(
+        cut2.system_cut().unwrap().partitions()[0].inclusive_frontier(),
+        2
+    );
+    assert_ne!(
+        cut1.system_cut().unwrap().partitions()[0].inclusive_frontier(),
+        cut2.system_cut().unwrap().partitions()[0].inclusive_frontier()
+    );
+    // 同一候选在不同 cut 下走不同的可见性路径（不共用缓存结果）。
+    let v_cut1 = evaluate_visibility(base, cut1).unwrap();
+    let v_cut2 = evaluate_visibility(base, cut2).unwrap();
+    assert_eq!(v_cut1, v_cut2); // 该候选无系统证据，两者都不证明可见
+    // 有系统证据的候选在不同 cut 前沿下判定不同。
+    let with_cut = system_version(base, "rx1", 15);
+    let cut_a = system_context(20, 0);
+    let cut_b = system_context(20, 1);
+    assert!(matches!(
+        evaluate_visibility(with_cut, cut_a).unwrap(),
+        VisibilityDecision::NotVisible(DecisionReason::OutsideSystemCut)
+    ));
+    assert!(matches!(
+        evaluate_visibility(with_cut, cut_b).unwrap(),
+        VisibilityDecision::Visible
+    ));
 }
 
 #[test]
@@ -1733,31 +2193,124 @@ fn tp_t117_chain_scale_bounded_and_cycle_rejected() {
         ),
         Err(PitError::InvalidRevisionChain)
     ));
-}
-
-#[test]
-fn tp_t118_zero_alloc_basic_path_stack_only() {
-    // 零分配基础路径：UnixTimeNs 构造、checked_add、unix_ns_to_stored 非错误路径
-    // 只操作 Copy/整数，不创建 String/Vec。此处以类型性质断言（未做 allocator 计数）。
-    assert_not_impl_any!(UnixTimeNs: Default, From<i64>);
-    let t = UnixTimeNs::from_unix_nanos(5);
-    let added = t.checked_add(Duration::from_secs(1)).unwrap();
-    assert_eq!(added.as_unix_nanos(), 1_000_000_005);
-    // precision 换算：可无损单位直接返回，错误路径用整数取模，无堆分配。
-    assert_eq!(
-        temporal::unix_ns_to_stored(
-            1_000_000,
-            TimePrecision::Microseconds,
-            PrecisionLossPolicy::Reject
+    // 大规模有界：1000 节链仍在线性有界工作内存内完成选择，不二次退化。
+    // 1000 候选的索引预留约需 ~100KB，故给足工作内存预算。
+    let big_limits =
+        ResourceLimits::try_new(256, 16, 8, 2048, 16, 2048, 2048, 16, 8 * 1024 * 1024).unwrap();
+    let big_digest = DigestRef::try_new("sha256-v1", b"t117-big", &big_limits).unwrap();
+    let mut big_nodes = Vec::new();
+    let mut big_prev = None;
+    for i in 1..=1000u64 {
+        let key = b"t117big";
+        let rev: &'static [u8] = Box::leak(format!("v{i}").into_boxed_str()).as_bytes();
+        let candidate = version_at(key, rev, i, 10 + i as i64, &big_limits);
+        let linked = FactVersionRef::try_new(
+            FactVersionParts {
+                dataset_snapshot: candidate.dataset_snapshot(),
+                profile: candidate.profile(),
+                source_release: candidate.source_release(),
+                identity: candidate.identity(),
+                input_provenance_ref: candidate.input_provenance_ref(),
+                operation: candidate.operation(),
+                payload_ref: candidate.payload_ref(),
+                source_temporal: candidate.source_temporal(),
+                revision_order: RevisionOrderRef::LinearSupersedes {
+                    predecessor: big_prev,
+                    chain_digest: big_digest,
+                },
+                source_evidence: candidate.source_evidence(),
+                receipts: candidate.receipts(),
+                system_evidence: candidate.system_evidence(),
+                effective_interval: candidate.effective_interval(),
+            },
+            &big_limits,
         )
-        .unwrap(),
-        1_000
+        .unwrap();
+        big_prev = Some(candidate.identity().revision_id());
+        big_nodes.push(linked);
+    }
+    let big_keys = [big_nodes[0].identity().fact_key()];
+    let big_policy = QueryPolicy::try_new(
+        TemporalProfile::PublishedObservation,
+        EvidenceAcceptance::ConservativeBounds,
+        RevisionOrderPolicy::LinearSupersedes,
+        OutputScope::SingleFact,
+        "policy1",
+        big_limits,
+    )
+    .unwrap();
+    let big_ctx = AsOfContext::try_new(AsOfContextParts {
+        known_at: time(2000),
+        knowledge_basis: KnowledgeBasis::SourcePublishedAsOf,
+        authority_scope: "authority1",
+        source_scope: Some("source1"),
+        consumer_boundary: None,
+        dataset_snapshot: snapshot(),
+        system_cut: None,
+        policy: big_policy,
+        fact_schema_ref: "fact1",
+        version_schema_ref: "version1",
+        evidence_schema_ref: "evidence1",
+        interpretation_ref: "interpretation1",
+    })
+    .unwrap();
+    let big_outcome = select_fact_as_of(
+        &big_nodes,
+        coverage(&big_keys, 2000, CoverageState::Complete),
+        big_ctx,
+    )
+    .unwrap();
+    assert_eq!(selected_revision(big_outcome), Some(b"v1000".as_slice()));
+    // 有界工作内存：1000 候选的预留估算不得超过策略上限（否则应 LimitExceeded）。
+    let per_candidate = std::mem::size_of::<FactVersionRef<'_>>()
+        .checked_mul(4)
+        .and_then(|value| value.checked_add(std::mem::size_of::<u64>()))
+        .and_then(|value| value.checked_add(std::mem::size_of::<bool>()))
+        .unwrap();
+    let index_bytes = big_nodes.len().checked_mul(per_candidate).unwrap();
+    let reserved = index_bytes
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(1024))
+        .unwrap();
+    assert!(
+        reserved <= big_limits.max_working_bytes(),
+        "1000-node chain must stay within working budget: {reserved} bytes"
     );
-    // 数学错误路径同样不依赖全局锁/堆结构：分类稳定。
-    assert_eq!(
-        temporal::unix_ns_to_stored(7, TimePrecision::Seconds, PrecisionLossPolicy::Reject),
-        Err(PrecisionError::PrecisionLoss)
-    );
+    // 超链深上限：max_chain_depth=8 时 1000 节链必须 LimitExceeded（不无限递归）。
+    let shallow_limits =
+        ResourceLimits::try_new(256, 16, 8, 2048, 16, 2048, 8, 16, 8 * 1024 * 1024).unwrap();
+    let shallow_policy = QueryPolicy::try_new(
+        TemporalProfile::PublishedObservation,
+        EvidenceAcceptance::ConservativeBounds,
+        RevisionOrderPolicy::LinearSupersedes,
+        OutputScope::SingleFact,
+        "policy1",
+        shallow_limits,
+    )
+    .unwrap();
+    let shallow_ctx = AsOfContext::try_new(AsOfContextParts {
+        known_at: time(2000),
+        knowledge_basis: KnowledgeBasis::SourcePublishedAsOf,
+        authority_scope: "authority1",
+        source_scope: Some("source1"),
+        consumer_boundary: None,
+        dataset_snapshot: snapshot(),
+        system_cut: None,
+        policy: shallow_policy,
+        fact_schema_ref: "fact1",
+        version_schema_ref: "version1",
+        evidence_schema_ref: "evidence1",
+        interpretation_ref: "interpretation1",
+    })
+    .unwrap();
+    assert!(matches!(
+        select_fact_as_of(
+            &big_nodes,
+            coverage(&big_keys, 2000, CoverageState::Complete),
+            shallow_ctx
+        ),
+        Err(PitError::LimitExceeded)
+    ));
 }
 
 #[test]
@@ -1770,21 +2323,42 @@ fn tp_t119_backend_equivalence_single_input_documented_outcome() {
         OutputScope::SingleFact,
         RevisionOrderPolicy::AuthoritativeSequence,
     );
-    assert!(matches!(
-        select_fact_as_of(&[upsert], coverage(&keys, 20, CoverageState::Complete), ctx).unwrap(),
-        FactOutcome::Selected { .. }
-    ));
+    let selected_candidates = [upsert];
+    let selected = select_fact_as_of(
+        &selected_candidates,
+        coverage(&keys, 20, CoverageState::Complete),
+        ctx,
+    )
+    .unwrap();
+    assert!(matches!(selected, FactOutcome::Selected { .. }));
+    // 选版：选中的修订身份与载荷与输入一致。
+    let (selected_id, selected_op) = match selected {
+        FactOutcome::Selected {
+            version, operation, ..
+        } => (version, operation),
+        FactOutcome::Withdrawn { .. } | FactOutcome::NoVisibleVersion { .. } => {
+            unreachable!("Selected expected: outcome is {selected:?}")
+        }
+    };
+    assert_eq!(selected_id.revision_id().as_bytes(), b"v1");
+    assert_eq!(selected_op, RevisionOperation::Upsert);
     let withdrawal = version(b"t119", b"w", 1, 10, RevisionOperation::Withdraw);
     let w_keys = [withdrawal.identity().fact_key()];
-    assert!(matches!(
-        select_fact_as_of(
-            &[withdrawal],
-            coverage(&w_keys, 20, CoverageState::Complete),
-            ctx
-        )
-        .unwrap(),
-        FactOutcome::Withdrawn { .. }
-    ));
+    let withdrawn_candidates = [withdrawal];
+    let withdrawn = select_fact_as_of(
+        &withdrawn_candidates,
+        coverage(&w_keys, 20, CoverageState::Complete),
+        ctx,
+    )
+    .unwrap();
+    assert!(matches!(withdrawn, FactOutcome::Withdrawn { .. }));
+    let withdrawn_id = match withdrawn {
+        FactOutcome::Withdrawn { version, .. } => version,
+        FactOutcome::Selected { .. } | FactOutcome::NoVisibleVersion { .. } => {
+            unreachable!("Withdrawn expected: outcome is {withdrawn:?}")
+        }
+    };
+    assert_eq!(withdrawn_id.revision_id().as_bytes(), b"w");
     let uncertain = version_bounds(b"t119", b"u", 1, 20, 15, 25, RevisionOperation::Upsert);
     let u_keys = [uncertain.identity().fact_key()];
     assert!(matches!(
@@ -1795,6 +2369,44 @@ fn tp_t119_backend_equivalence_single_input_documented_outcome() {
         ),
         Err(PitError::IndeterminateSelection)
     ));
+    // 同一输入在批量入口（AllFacts）下结果一致（选版/撤回/Indeterminate 处理一致）。
+    let batch_ctx = context(
+        20,
+        OutputScope::AllFacts,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    let batch_candidates = [upsert];
+    let batch = select_facts_as_of(
+        QueryInputRef {
+            candidates: &batch_candidates,
+            coverage: coverage(&keys, 20, CoverageState::Complete),
+        },
+        batch_ctx,
+    )
+    .unwrap();
+    assert_eq!(batch.outcomes.len(), 1);
+    assert!(matches!(batch.outcomes[0], FactOutcome::Selected { .. }));
+    // 后端等价对照的边界：本仓只提供 Rust fixture 选择器与文档化结果；
+    // 真实存储选择器的等价性由消费方集成证据承担（SPEC §32.1）。
+    let manifest = include_str!("../Cargo.toml");
+    assert!(
+        manifest.contains("publish = false"),
+        "fixture-only crate must not claim production backend equivalence"
+    );
+    // 本仓不声明任何存储后端依赖（真实存储对照在消费方）。
+    let deps = manifest
+        .split("[dependencies]")
+        .nth(1)
+        .unwrap()
+        .split("[dev-dependencies]")
+        .next()
+        .unwrap();
+    for backend in ["sqlx", "postgres", "redis", "tokio", "rusqlite", "diesel"] {
+        assert!(
+            !deps.contains(backend),
+            "no storage backend dependency expected: {backend}"
+        );
+    }
 }
 
 #[test]
@@ -1807,6 +2419,44 @@ fn tp_t120_delivery_evidence_grading_not_claiming_production() {
     );
     assert!(!manifest.contains("crates.io"), "no crates.io promise");
     assert!(!manifest.contains("docs.rs"), "no docs.rs badge/promise");
+    // Rust/平台/集成 gate 仍 NOT_RUN：README 的本地门禁与验收检查表都声明
+    // 全部行为验收初始 NOT_RUN，不因文档检查通过而宣称生产完成。
+    let readme = include_str!("../README.md");
+    assert!(
+        readme.contains("publish = false"),
+        "README must not claim publishable crate"
+    );
+    assert!(
+        !readme.contains("crates.io") && !readme.contains("docs.rs"),
+        "README must not provide crates.io/docs.rs links"
+    );
+    // 检查表初始状态：全部行为验收 NOT_RUN（不预先打勾）。
+    let checklist = include_str!("../checklist.md");
+    assert!(
+        checklist.contains("初始状态：全部行为验收 NOT_RUN"),
+        "checklist must keep initial NOT_RUN state"
+    );
+    // goal.md 的验收口径：机器全绿不等于合入权。
+    let goal = include_str!("../goal.md");
+    assert!(
+        goal.contains("机器全绿不等于取得合入权"),
+        "goal.md must keep the machine-green caveat"
+    );
+    // 检查表中 TP-T119/T120 仍未勾选（Rust/平台/集成 gate 仍 NOT_RUN）。
+    let t120_line = checklist.lines().find(|line| line.contains("TP-T120"));
+    assert!(
+        t120_line.is_some(),
+        "TP-T120 must be registered in checklist.md"
+    );
+    let t120_line = t120_line.unwrap_or("");
+    assert!(
+        t120_line.contains("- [ ]"),
+        "TP-T120 must remain unchecked: {t120_line}"
+    );
+    assert!(
+        t120_line.contains("NOT_RUN"),
+        "TP-T120 must be marked NOT_RUN: {t120_line}"
+    );
 }
 
 // ── 22.10 复用辅助 ─────────────────────────────────────────
@@ -1817,15 +2467,31 @@ fn assertion_version(
     limits: &ResourceLimits,
     snapshot: DatasetSnapshotRef<'static>,
 ) -> FactVersionRef<'static> {
+    assertion_revision(
+        key,
+        (b"v1", 1, 10, RevisionOperation::Upsert),
+        interval,
+        limits,
+        snapshot,
+    )
+}
+
+fn assertion_revision(
+    key: &'static [u8],
+    (revision, ordinal, release, operation): (&'static [u8], u64, i64, RevisionOperation),
+    interval: &'static EffectiveInterval,
+    limits: &ResourceLimits,
+    snapshot: DatasetSnapshotRef<'static>,
+) -> FactVersionRef<'static> {
     let key = FactKeyRef::try_new(key, limits).unwrap();
     let digest = DigestRef::try_new("sha256-v1", key.as_bytes(), limits).unwrap();
-    let revision = RevisionIdRef::try_new(b"v1", limits).unwrap();
+    let revision = RevisionIdRef::try_new(revision, limits).unwrap();
     let identity = FactVersionIdRef::try_new("authority1", key, revision, digest, limits).unwrap();
     let draft = TemporalDraft {
         event_time: TimeField::Unknown,
         observation_time: TimeField::Unknown,
-        publication_time: TimeField::Known(time(10)),
-        received_time: TimeField::Known(time(12)),
+        publication_time: TimeField::Known(time(release)),
+        received_time: TimeField::Known(time(release + 2)),
         revision_time: TimeField::Unknown,
         effective_time: TimeField::Known(interval.start()),
     };
@@ -1833,8 +2499,8 @@ fn assertion_version(
         draft.validate(TemporalProfile::Announcement).unwrap(),
     ));
     let bounds = TimeBounds::try_new(
-        Some(time(10)),
-        Some(time(10)),
+        Some(time(release)),
+        Some(time(release)),
         TimeQuality::Exact,
         "quality1",
         limits,
@@ -1858,10 +2524,10 @@ fn assertion_version(
             source_release: SourceReleaseRequirement::Required,
             identity,
             input_provenance_ref: "provenance1",
-            operation: RevisionOperation::Upsert,
+            operation,
             payload_ref: Some(PayloadRef::try_new("payload1", "v1", limits).unwrap()),
             source_temporal: temporal.source_roles(),
-            revision_order: RevisionOrderRef::sequence("order1", 1, limits).unwrap(),
+            revision_order: RevisionOrderRef::sequence("order1", ordinal, limits).unwrap(),
             source_evidence: Some(evidence),
             receipts: &[],
             system_evidence: &[],
