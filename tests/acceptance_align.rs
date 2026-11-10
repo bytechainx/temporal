@@ -442,12 +442,27 @@ fn with_system_evidence(
 }
 
 fn selected_revision<'a>(outcome: FactOutcome<'a>) -> Option<&'a [u8]> {
+    selected_identity(outcome).map(|id| id.revision_id().as_bytes())
+}
+
+/// 选中结果的版本身份引用；用于比较两侧身份而不合并。
+fn selected_identity<'a>(outcome: FactOutcome<'a>) -> Option<FactVersionIdRef<'a>> {
     match outcome {
         FactOutcome::Selected { version, .. } | FactOutcome::Withdrawn { version, .. } => {
-            Some(version.revision_id().as_bytes())
+            Some(version)
         }
         _ => None,
     }
+}
+
+/// 左侧身份（供 TP-T105 join 对照）。
+fn left_selected_identity<'a>(outcome: FactOutcome<'a>) -> Option<FactVersionIdRef<'a>> {
+    selected_identity(outcome)
+}
+
+/// 右侧身份（供 TP-T105 join 对照）。
+fn right_selected_identity<'a>(outcome: FactOutcome<'a>) -> Option<FactVersionIdRef<'a>> {
+    selected_identity(outcome)
 }
 
 // ── 22.7 来源可见性与不确定性 ─────────────────────────────
@@ -1346,15 +1361,18 @@ fn tp_t100_predicted_future_observation_not_auto_leaked() {
 // ── 22.11 派生数据与复现性质 ───────────────────────────────
 
 // T101–T106 属派生数据下界 / 完成时间下界 / 历史伪造拒绝 / 反事实模拟 / PIT join /
-// 模型实际可用性，均为消费方所有（规格 §17）；crate 不暴露派生数据 API。
-// 这里断言 crate 可保证的相应不变量：输入证据尚不可见的版本，可见性判定为
-// Indeterminate，从而不能为派生「可用性早于其输入」提供证明。
+// 模型实际可用性。按 SPEC §32.1，这些场景须拆成 temporal 纯 fixture 与消费方集成
+// 两半；本节是 temporal 侧：断言 crate 可保证的不变量（输入可见性、完成下界、
+// 模式隔离、join 时点、部署边界）。派生数据 API 与执行模式由 Feature/backtest
+// Owner 实现（§17.3），本仓不暴露。
+
+// TP-T101 派生下界：一个输入尚未可见，输出被标为可用 → lineage 校验拒绝。
 #[test]
-fn tp_t101_102_103_104_105_106_derived_input_visibility_invariant() {
+fn tp_t101_derived_lower_bound_rejects_unavailable_input() {
     let base = version(b"t101", b"v1", 1, 10, RevisionOperation::Upsert);
-    // 输入证据缺失或未按截止证明：任何后续使用都落在 Indeterminate，不能进真实决策。
+    // 输入证据缺失或未按截止证明：任何后续使用都落在 Indeterminate。
     let unproven = with_order(base, base.revision_order(), None);
-    let mut ctx = context(
+    let ctx = context(
         20,
         OutputScope::SingleFact,
         RevisionOrderPolicy::AuthoritativeSequence,
@@ -1363,21 +1381,79 @@ fn tp_t101_102_103_104_105_106_derived_input_visibility_invariant() {
         evaluate_visibility(unproven, ctx).unwrap(),
         VisibilityDecision::Indeterminate(_)
     ));
-    // 未来发布的输入同样不可视为在 T 已可用。
-    let future = version(b"t102", b"v1", 1, 40, RevisionOperation::Upsert);
-    ctx = context(
+    // 未来发布的输入同样不可视为在 T 已可用 → 不能作为派生可用性的下界。
+    let future = version(b"t101f", b"v1", 1, 40, RevisionOperation::Upsert);
+    let future_ctx = context(
         30,
         OutputScope::SingleFact,
         RevisionOrderPolicy::AuthoritativeSequence,
     );
     assert!(matches!(
-        evaluate_visibility(future, ctx).unwrap(),
+        evaluate_visibility(future, future_ctx).unwrap(),
+        VisibilityDecision::NotVisible(DecisionReason::ReleaseAfterCutoff)
+    ));
+    // 可见性判定不早于输入：任一输入不可见时不得给出「可用」结论。
+    let base_keys = [base.identity().fact_key()];
+    let unproven_candidates = [unproven];
+    let selected = select_fact_as_of(
+        &unproven_candidates,
+        coverage(&base_keys, 20, CoverageState::Complete),
+        ctx,
+    );
+    assert!(!matches!(selected, Ok(FactOutcome::Selected { .. })));
+}
+
+// TP-T102 完成时间下界：所有输入已知，但计算/交付尚未完成 → 真实系统输出不可消费。
+#[test]
+fn tp_t102_completion_time_lower_bound_not_consumable() {
+    // 输入在 T=20 已可见。
+    let input = version(b"t102", b"v1", 1, 10, RevisionOperation::Upsert);
+    let keys = [input.identity().fact_key()];
+    let ctx = context(
+        20,
+        OutputScope::SingleFact,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    assert!(matches!(
+        evaluate_visibility(input, ctx).unwrap(),
+        VisibilityDecision::Visible
+    ));
+    // 但计算/交付完成于 40：在 T=20 的真实系统输出不可消费。
+    // crate 只证明输入可见性；完成事件与消费边界证据由消费方提供（§17.1）。
+    let completion = version(b"t102c", b"v1", 1, 40, RevisionOperation::Upsert);
+    let completion_ctx = context(
+        30,
+        OutputScope::SingleFact,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    assert!(matches!(
+        evaluate_visibility(completion, completion_ctx).unwrap(),
+        VisibilityDecision::NotVisible(DecisionReason::ReleaseAfterCutoff)
+    ));
+    // 完成事件在 T=20 不可见 ⇒ 不能声称真实系统输出可消费。
+    assert!(matches!(
+        evaluate_visibility(completion, ctx).unwrap(),
         VisibilityDecision::NotVisible(_)
     ));
-    // 真实执行反查：来源证据可证明历史发布，但不能伪造「系统 receipt」。
+    // 输入可见不等于输出可用：严格查询只返回输入的选定结果。
+    let input_candidates = [input];
+    let selected = select_fact_as_of(
+        &input_candidates,
+        coverage(&keys, 20, CoverageState::Complete),
+        ctx,
+    )
+    .unwrap();
+    assert_eq!(selected_revision(selected), Some(b"v1".as_slice()));
+    let _ = completion_ctx;
+}
+
+// TP-T103 今日重算历史：今天生成特征而写历史 system_available → 拒绝历史伪造。
+#[test]
+fn tp_t103_today_recompute_rejects_actual_execution_forgery() {
+    // 来源证据可证明历史发布，但不能伪造「系统 receipt」。
     let sept = version(b"t103", b"v1", 1, 10, RevisionOperation::Upsert);
     let forged = system_version(sept, "rx1", 20);
-    ctx = context(
+    let ctx = context(
         20,
         OutputScope::SingleFact,
         RevisionOrderPolicy::AuthoritativeSequence,
@@ -1386,6 +1462,150 @@ fn tp_t101_102_103_104_105_106_derived_input_visibility_invariant() {
     assert!(matches!(
         evaluate_visibility(forged, ctx).unwrap(),
         VisibilityDecision::Visible
+    ));
+    // 系统模式下：无系统证据的候选不因来源发布而自动可见（crate 不把
+    // source 证据冒充为系统可用性）。
+    let no_system_evidence = with_order(sept, sept.revision_order(), None);
+    let sys = system_context(20, 1);
+    assert!(!matches!(
+        evaluate_visibility(no_system_evidence, sys).unwrap(),
+        VisibilityDecision::Visible
+    ));
+    // 而带系统证据的候选在系统模式下可被独立证明（两种证据不互相冒充）。
+    assert!(matches!(
+        evaluate_visibility(forged, sys).unwrap(),
+        VisibilityDecision::Visible
+    ));
+    // 今日重算不能写历史 system_available：crate 无执行模式 API，
+    // 模式隔离由消费方按 §17.2 实现；此处断言 receipt 与 source 证据不互相冒充。
+    assert_eq!(forged.receipts().len(), 1);
+    assert_eq!(forged.system_evidence().len(), 1);
+    assert!(forged.source_evidence().is_some());
+}
+
+// TP-T104 反事实模拟：今天运行但每步只用当时许可输入 → 可标 CounterfactualSimulation，
+// 不能标真实历史执行。
+#[test]
+fn tp_t104_counterfactual_simulation_mode_isolation() {
+    // 模拟知识时间 T=20：只用当时许可输入。
+    let input = version(b"t104", b"v1", 1, 10, RevisionOperation::Upsert);
+    let keys = [input.identity().fact_key()];
+    let ctx = context(
+        20,
+        OutputScope::SingleFact,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    let input_candidates = [input];
+    let selected = select_fact_as_of(
+        &input_candidates,
+        coverage(&keys, 20, CoverageState::Complete),
+        ctx,
+    )
+    .unwrap();
+    assert_eq!(selected_revision(selected), Some(b"v1".as_slice()));
+    // 未来输入不得进入模拟决策（模拟的 declared knowledge basis/cutoff 固定）。
+    let future = version(b"t104f", b"v2", 2, 40, RevisionOperation::Upsert);
+    assert!(matches!(
+        evaluate_visibility(future, ctx).unwrap(),
+        VisibilityDecision::NotVisible(_)
+    ));
+    // 模拟结果与真实历史执行是两种模式：crate 不把模拟时间当历史证据。
+    // 模式标记由消费方保存（§17.2），此处断言输入时点隔离成立。
+    let uncertain = version_bounds(b"t104u", b"v1", 1, 20, 15, 25, RevisionOperation::Upsert);
+    let u_keys = [uncertain.identity().fact_key()];
+    assert!(matches!(
+        select_fact_as_of(
+            &[uncertain],
+            coverage(&u_keys, 20, CoverageState::Complete),
+            ctx
+        ),
+        Err(PitError::IndeterminateSelection)
+    ));
+}
+
+// TP-T105 PIT join：一侧存在未来修订，另一侧已知 → 关联选择仅使用两侧各自当时版本。
+#[test]
+fn tp_t105_pit_join_uses_each_side_at_its_own_time() {
+    let left = version(b"t105l", b"v1", 1, 10, RevisionOperation::Upsert);
+    let right_old = version(b"t105r", b"v1", 1, 10, RevisionOperation::Upsert);
+    let right_future = version(b"t105r", b"v2", 2, 40, RevisionOperation::Upsert);
+    let left_keys = [left.identity().fact_key()];
+    let right_keys = [right_old.identity().fact_key()];
+    let ctx = context(
+        20,
+        OutputScope::SingleFact,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    // 左侧当时版本：v1。
+    let left_candidates = [left];
+    let left_selected = select_fact_as_of(
+        &left_candidates,
+        coverage(&left_keys, 20, CoverageState::Complete),
+        ctx,
+    )
+    .unwrap();
+    assert_eq!(selected_revision(left_selected), Some(b"v1".as_slice()));
+    // 右侧当时版本：v1（未来 v2 不得参与 join）。
+    let right_candidates = [right_old, right_future];
+    let right_selected = select_fact_as_of(
+        &right_candidates,
+        coverage(&right_keys, 20, CoverageState::Complete),
+        ctx,
+    )
+    .unwrap();
+    assert_eq!(selected_revision(right_selected), Some(b"v1".as_slice()));
+    // 未来修订在 T=20 不可见：join 不会先取全量最终值再过滤。
+    assert!(matches!(
+        evaluate_visibility(right_future, ctx).unwrap(),
+        VisibilityDecision::NotVisible(DecisionReason::ReleaseAfterCutoff)
+    ));
+    // 两侧各自当时版本一致，但身份不同（不因 revision_id 相同而合并）。
+    assert_ne!(
+        left_selected_identity(left_selected),
+        right_selected_identity(right_selected)
+    );
+}
+
+// TP-T106 模型实际可用性：样本截止早于 T、模型部署晚于 T → 不能进入 T 的真实系统决策。
+#[test]
+fn tp_t106_model_availability_requires_deployment_before_t() {
+    // 样本截止 10（早于 T=20），模型部署 40（晚于 T）。
+    let sample = version(b"t106s", b"v1", 1, 10, RevisionOperation::Upsert);
+    let deployment = version(b"t106d", b"v1", 1, 40, RevisionOperation::Upsert);
+    let sample_keys = [sample.identity().fact_key()];
+    let deployment_keys = [deployment.identity().fact_key()];
+    let ctx = context(
+        20,
+        OutputScope::SingleFact,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    // 样本在 T 可见，但部署不可见 ⇒ 模型在 T 不可用。
+    assert!(matches!(
+        evaluate_visibility(sample, ctx).unwrap(),
+        VisibilityDecision::Visible
+    ));
+    assert!(matches!(
+        evaluate_visibility(deployment, ctx).unwrap(),
+        VisibilityDecision::NotVisible(_)
+    ));
+    // 严格查询在 T=20 不得给出部署版本作为可用模型。
+    let deployment_candidates = [deployment];
+    let selected = select_fact_as_of(
+        &deployment_candidates,
+        coverage(&deployment_keys, 20, CoverageState::Complete),
+        ctx,
+    );
+    assert!(!matches!(selected, Ok(FactOutcome::Selected { .. })));
+    // 样本可见不等于模型可用：部署边界是独立证据。
+    let sample_candidates = [sample];
+    assert!(matches!(
+        select_fact_as_of(
+            &sample_candidates,
+            coverage(&sample_keys, 20, CoverageState::Complete),
+            ctx
+        )
+        .unwrap(),
+        FactOutcome::Selected { .. }
     ));
 }
 
