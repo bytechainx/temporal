@@ -1,0 +1,21 @@
+[package]
+name = "temporal-independent-consumer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "TP-T177 独立外部消费证据：只检出 temporal 的独立 crate"
+license = "MIT"
+publish = false
+
+[dependencies]
+temporal = { path = ".." }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[workspace]
