@@ -150,17 +150,23 @@ fn tp_t118_zero_alloc_basic_path_stack_only() {
     assert_eq!(allocations, 0, "结构化数学错误路径不得堆分配");
     assert_eq!(deallocations, 0, "结构化数学错误路径不得堆释放");
 
-    // SystemTime 转换基础路径（无损）：零堆分配。
+    // SystemTime 转换基础路径：零堆分配。
+    // Windows 的 SystemTime 不保留纳秒精度，故只对无损平台断言往返相等；
+    // 精度受限平台断言返回 SystemTimePrecisionLoss（错误路径同样零分配）。
     reset_counters();
-    let system = UnixTimeNs::from_unix_nanos(1_000_000_005)
-        .try_into_system_time()
-        .unwrap();
-    assert_eq!(
-        UnixTimeNs::try_from_system_time(system)
-            .unwrap()
-            .as_unix_nanos(),
-        1_000_000_005
-    );
+    let nanos = 1_000_000_005;
+    match UnixTimeNs::from_unix_nanos(nanos).try_into_system_time() {
+        Ok(system) => {
+            assert_eq!(
+                UnixTimeNs::try_from_system_time(system)
+                    .unwrap()
+                    .as_unix_nanos(),
+                nanos
+            );
+        }
+        Err(TimeError::SystemTimePrecisionLoss) => {}
+        Err(other) => unreachable!("unexpected SystemTime error: {other:?}"),
+    }
     let (allocations, deallocations) = counters();
     assert_eq!(allocations, 0, "SystemTime 转换基础路径不得堆分配");
     assert_eq!(deallocations, 0, "SystemTime 转换基础路径不得堆释放");
