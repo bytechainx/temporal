@@ -118,10 +118,10 @@ pub enum KnowledgeBasis {
     SystemAsKnown,
 }
 
-/// 已证明可用时间的接受方式。
+/// 时间界限接受方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvidenceAcceptance {
-    /// 只接受上下界同一时刻的证明。
+    /// 只接受上下界同一时刻的声明。
     ExactOnly,
     /// 接受真实区间的保守上界。
     ConservativeBounds,
@@ -299,7 +299,7 @@ impl<'a> AsOfContext<'a> {
         }
         Ok(Self(parts))
     }
-    /// 知识截止点；包含已证明的相同时刻。
+    /// 知识截止点；包含声明为同一精确时刻的时点。
     pub const fn known_at(self) -> UnixTimeNs {
         self.0.known_at
     }
@@ -349,16 +349,16 @@ impl<'a> AsOfContext<'a> {
     }
 }
 
-/// 输入候选是否已经由受信适配器完整枚举。
+/// 输入候选是否已由外部适配器声明完整枚举。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoverageState {
-    /// 受信适配器声明并留存证明的完整覆盖。
+    /// 适配器声明的完整覆盖。
     Complete,
-    /// 尚不能证明候选已完整枚举。
+    /// 输入不足以判定候选已完整枚举。
     Incomplete,
 }
 
-/// 外部受信枚举器提供的覆盖清单与验收引用。
+/// 外部候选枚举器提供的覆盖清单与验收引用。
 #[derive(Debug, Clone, Copy)]
 pub struct CandidateCoverageRef<'a> {
     authority_scope: &'a str,
@@ -442,11 +442,11 @@ impl<'a> CandidateCoverageRef<'a> {
     pub const fn state(self) -> CoverageState {
         self.state
     }
-    /// 候选枚举证明清单。
+    /// 候选枚举清单引用。
     pub const fn manifest_ref(self) -> &'a str {
         self.manifest_ref
     }
-    /// 受信适配器身份与版本。
+    /// 适配器身份与版本；本库不判定其是否受信。
     pub const fn adapter_ref(self) -> &'a str {
         self.adapter_ref
     }

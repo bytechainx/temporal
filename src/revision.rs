@@ -128,7 +128,7 @@ pub enum RevisionOperation {
 /// 来源发布证明的明确适用规则。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceReleaseRequirement<'a> {
-    /// 必须提供与当前候选绑定的来源发布证明。
+    /// 必须提供与当前候选绑定的来源发布证据引用。
     Required,
     /// 产品按版本化权威合同证明独立发布阶段不适用。
     NotApplicable {
@@ -147,11 +147,11 @@ pub enum RevisionOrderRef<'a> {
         /// 该作用域内的非负修订序号。
         ordinal: u64,
     },
-    /// 显式初始节点或单一前驱；摘要固定权威链关系。
+    /// 显式初始节点或单一前驱；链关系摘要由调用方声明。
     LinearSupersedes {
         /// 单一直接前驱；初始节点为 None。
         predecessor: Option<RevisionIdRef<'a>>,
-        /// 固定完整权威链关系的摘要。
+        /// 调用方声明的完整权威链关系摘要；本库只作字节一致性检查，不核验摘要内容。
         chain_digest: DigestRef<'a>,
     },
 }
@@ -219,7 +219,7 @@ impl<'a> FactVersionIdRef<'a> {
 pub struct FactVersionParts<'a> {
     /// 当前版本所在的不可变输入快照。
     pub dataset_snapshot: DatasetSnapshotRef<'a>,
-    /// 已验证时间资料的 profile。
+    /// 时间角色已按该 profile 校验的 profile。
     pub profile: TemporalProfile,
     /// 当前候选的来源发布证明适用规则。
     pub source_release: SourceReleaseRequirement<'a>,
