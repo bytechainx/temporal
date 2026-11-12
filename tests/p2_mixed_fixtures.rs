@@ -503,10 +503,11 @@ fn tp_t149_rebuilt_log_epoch_isolation() {
     )
     .unwrap()]));
     let rebuilt = with_system_evidence(base, first.receipts(), rebuilt_events, &limits()).unwrap();
-    // epoch/cut 隔离：cut 的 boundary_epoch 是 log1，log2 事件不得放进旧历史视图。
+    // epoch/cut 隔离：cut 的 boundary_epoch 是 log1，log2 事件不在该覆盖声明内，
+    // 成员关系未证明 → Indeterminate，不得推断为确定不可见（WP-01）。
     assert!(matches!(
         evaluate_visibility(rebuilt, system_context(20, 1)).unwrap(),
-        VisibilityDecision::NotVisible(DecisionReason::OutsideSystemCut)
+        VisibilityDecision::Indeterminate(DecisionReason::TargetCoverageUnproven)
     ));
     // 新 epoch 的 cut 下该事件可见（隔离而非丢弃）。
     let log2_ctx = {
