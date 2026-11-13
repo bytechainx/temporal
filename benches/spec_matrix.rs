@@ -221,6 +221,7 @@ fn emit(cell: &str, n: usize, values: Vec<u128>, allocs_per_op: u128, peak: u64)
 }
 
 fn measure<F: FnMut()>(cell: &str, mut op: F, iterations: usize, samples: usize) {
+    op();
     let mut values = Vec::with_capacity(samples);
     let mut allocs = 0_u64;
     for _ in 0..samples {
@@ -241,6 +242,11 @@ fn measure<F: FnMut()>(cell: &str, mut op: F, iterations: usize, samples: usize)
 
 fn select_cell(revisions: usize, variant: Variant, samples: usize) -> Result<(), Box<dyn Error>> {
     let fixture = build(revisions, variant)?;
+    let _ = black_box(select_fact_as_of(
+        black_box(&fixture.candidates),
+        fixture.coverage,
+        fixture.context,
+    ));
     let mut values = Vec::with_capacity(samples);
     let mut allocs_total = 0_u64;
     for _ in 0..samples {
@@ -283,7 +289,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             black_box(UnixTimeNs::from_unix_nanos(black_box(-1_234_567_890)));
         },
         100_000,
-        15,
+        30,
     );
     measure(
         "checked_add",
@@ -291,7 +297,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let _ = black_box(at.checked_add(black_box(Duration::from_nanos(1))));
         },
         100_000,
-        15,
+        30,
     );
     measure(
         "checked_sub",
@@ -299,7 +305,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let _ = black_box(at.checked_sub(black_box(Duration::from_nanos(1))));
         },
         100_000,
-        15,
+        30,
     );
     measure(
         "system_time_from",
@@ -307,7 +313,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let _ = black_box(UnixTimeNs::try_from_system_time(black_box(system_time)));
         },
         100_000,
-        15,
+        30,
     );
     measure(
         "system_time_to",
@@ -315,7 +321,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let _ = black_box(at.try_into_system_time());
         },
         100_000,
-        15,
+        30,
     );
     for (cell, policy) in [
         ("quantize_reject", PrecisionLossPolicy::Reject),
@@ -332,7 +338,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 ));
             },
             100_000,
-            15,
+            30,
         );
     }
     let draft = TemporalDraft {
@@ -353,7 +359,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
         },
         100_000,
-        15,
+        30,
     );
     let single = build(1, Variant::Ordered)?;
     measure(
@@ -365,17 +371,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             ));
         },
         100_000,
-        15,
+        30,
     );
 
     select_cell(1, Variant::Ordered, 30)?;
     select_cell(10, Variant::Ordered, 30)?;
     select_cell(100, Variant::Ordered, 30)?;
-    select_cell(1_000, Variant::Ordered, 10)?;
-    select_cell(100_000, Variant::Ordered, 5)?;
-    select_cell(1_000, Variant::Reversed, 10)?;
-    select_cell(1_000, Variant::Duplicates, 10)?;
-    select_cell(1_000, Variant::Withdrawn, 10)?;
-    select_cell(1_000, Variant::Incomplete, 10)?;
+    select_cell(1_000, Variant::Ordered, 30)?;
+    select_cell(100_000, Variant::Ordered, 30)?;
+    select_cell(1_000, Variant::Reversed, 30)?;
+    select_cell(1_000, Variant::Duplicates, 30)?;
+    select_cell(1_000, Variant::Withdrawn, 30)?;
+    select_cell(1_000, Variant::Incomplete, 30)?;
     Ok(())
 }
