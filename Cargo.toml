@@ -28,6 +28,10 @@ harness = false
 name = "pit_selection"
 harness = false
 
+[[bench]]
+name = "spec_matrix"
+harness = false
+
 [lints.rust]
 private_interfaces = "deny"
 private_bounds = "deny"
