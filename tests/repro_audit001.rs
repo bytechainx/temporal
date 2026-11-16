@@ -271,3 +271,152 @@ fn event_after_proven_frontier_stays_not_visible() {
         VisibilityDecision::NotVisible(DecisionReason::OutsideSystemCut)
     ));
 }
+
+/// 构造一条绑定 `boundary` 的 receipt（接收界限已证早于截止点 20）。
+fn proven_receipt(base: FactVersionRef<'static>) -> &'static [ReceiptEvidenceRef<'static>] {
+    let limits = limits();
+    let proof = EvidenceProofRef::try_new(
+        "system-proof1",
+        "schema1",
+        "extractor1",
+        "raw1",
+        "accepted1",
+        &limits,
+    )
+    .unwrap();
+    let receipt_bounds = TimeBounds::try_new(
+        Some(time(15)),
+        Some(time(15)),
+        TimeQuality::Exact,
+        "quality1",
+        &limits,
+    )
+    .unwrap();
+    Box::leak(Box::new([ReceiptEvidenceRef::try_new(
+        base.identity(),
+        "receiver1",
+        "rx1",
+        "receipt1",
+        receipt_bounds,
+        proof,
+        &limits,
+    )
+    .unwrap()]))
+}
+
+/// 构造一条系统可读事件；`bounds` 由调用方按场景给定。
+fn system_event(
+    base: FactVersionRef<'static>,
+    event_id: &'static str,
+    partition: &'static str,
+    cursor: u64,
+    bounds: TimeBounds<'static>,
+) -> SystemVisibilityEvidenceRef<'static> {
+    let limits = limits();
+    let proof = EvidenceProofRef::try_new(
+        "system-proof1",
+        "schema1",
+        "extractor1",
+        "raw1",
+        "accepted1",
+        &limits,
+    )
+    .unwrap();
+    SystemVisibilityEvidenceRef::try_new(
+        base.identity(),
+        CONSUMER_A,
+        "log1",
+        event_id,
+        "receiver1",
+        "rx1",
+        "receipt1",
+        partition,
+        cursor,
+        bounds,
+        proof,
+        &limits,
+    )
+    .unwrap()
+}
+
+fn exact_bounds(at: i64) -> TimeBounds<'static> {
+    TimeBounds::try_new(
+        Some(time(at)),
+        Some(time(at)),
+        TimeQuality::Exact,
+        "quality1",
+        &limits(),
+    )
+    .unwrap()
+}
+
+/// 把自定义 receipt 与事件集合装到版本上。
+fn with_system_evidence(
+    base: FactVersionRef<'static>,
+    receipts: &'static [ReceiptEvidenceRef<'static>],
+    events: &'static [SystemVisibilityEvidenceRef<'static>],
+) -> FactVersionRef<'static> {
+    let limits = limits();
+    FactVersionRef::try_new(
+        FactVersionParts {
+            dataset_snapshot: base.dataset_snapshot(),
+            profile: base.profile(),
+            source_release: base.source_release(),
+            identity: base.identity(),
+            input_provenance_ref: base.input_provenance_ref(),
+            operation: base.operation(),
+            payload_ref: base.payload_ref(),
+            source_temporal: base.source_temporal(),
+            revision_order: base.revision_order(),
+            source_evidence: base.source_evidence(),
+            receipts,
+            system_evidence: events,
+            effective_interval: base.effective_interval(),
+        },
+        &limits,
+    )
+    .unwrap()
+}
+
+/// AUD-001 同类变体（WP-04 范围）：cut 内事件已证未来才可读（`saw_future`）
+/// 与分区未被 cut 声明的事件（`saw_uncovered`）同时存在时，未覆盖事件可能
+/// 提供可见性证明，不得返回确定的 `NotVisible`。
+/// 未修复代码在 `saw_future` 分支提前返回 `NotVisible(SystemAvailableAfterCutoff)`，必然失败。
+#[test]
+fn future_in_cut_plus_uncovered_partition_is_indeterminate() {
+    let base = version(b"aud001-e", b"v1");
+    let receipts = proven_receipt(base);
+    // evA：part1 在 cut 内（cursor=1 <= frontier=5），但界限证明 30 才可用 > cutoff 20。
+    let ev_a = system_event(base, "eventA", "part1", 1, exact_bounds(30));
+    // evB：part2 未被 cut 声明，成员关系未证明。
+    let ev_b = system_event(base, "eventB", "part2", 1, exact_bounds(16));
+    let events: &'static [SystemVisibilityEvidenceRef<'static>] = Box::leak(Box::new([ev_a, ev_b]));
+    let v1 = with_system_evidence(base, receipts, events);
+    let decision = evaluate_visibility(v1, query_context(CONSUMER_A, 5)).unwrap();
+    assert!(
+        matches!(
+            decision,
+            VisibilityDecision::Indeterminate(DecisionReason::TargetCoverageUnproven)
+        ),
+        "存在未覆盖事件时不得给出确定 NotVisible，实际为 {decision:?}"
+    );
+}
+
+/// 修复边界：cut 内事件已证未来才可读、其余事件都在已证明前沿之外
+/// （无未覆盖事件）→ 仍然 `NotVisible(SystemAvailableAfterCutoff)`。
+/// 这是该原因码的合法用途，修复不得一并放宽。
+#[test]
+fn future_in_cut_without_uncovered_stays_not_visible() {
+    let base = version(b"aud001-f", b"v1");
+    let receipts = proven_receipt(base);
+    // evA：part1 在 cut 内，界限证明 30 才可用 > cutoff 20。
+    let ev_a = system_event(base, "eventA", "part1", 1, exact_bounds(30));
+    // evC：part1 在 cut 内但 cursor=9 越过前沿 5，已证排除。
+    let ev_c = system_event(base, "eventC", "part1", 9, exact_bounds(16));
+    let events: &'static [SystemVisibilityEvidenceRef<'static>] = Box::leak(Box::new([ev_a, ev_c]));
+    let v1 = with_system_evidence(base, receipts, events);
+    assert!(matches!(
+        evaluate_visibility(v1, query_context(CONSUMER_A, 5)).unwrap(),
+        VisibilityDecision::NotVisible(DecisionReason::SystemAvailableAfterCutoff)
+    ));
+}
