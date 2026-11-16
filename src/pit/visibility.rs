@@ -225,6 +225,12 @@ pub fn evaluate_visibility(
         ));
     }
     if saw_future {
+        // 已证未来的事件不能排除未覆盖事件可能提供的可见性证明。
+        if saw_uncovered {
+            return Ok(VisibilityDecision::Indeterminate(
+                DecisionReason::TargetCoverageUnproven,
+            ));
+        }
         return Ok(VisibilityDecision::NotVisible(
             DecisionReason::SystemAvailableAfterCutoff,
         ));
