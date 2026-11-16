@@ -254,23 +254,15 @@ impl<'a> FactVersionRef<'a> {
     pub fn try_new(parts: FactVersionParts<'a>, limits: &ResourceLimits) -> Result<Self, PitError> {
         checked_label(parts.input_provenance_ref, limits.max_identity_bytes())?;
         let roles = parts.source_temporal;
-        let profile_matches = match parts.profile {
-            TemporalProfile::EventRecord => matches!(roles.event_time(), TimeField::Known(_)),
-            TemporalProfile::PublishedObservation => {
-                matches!(roles.observation_time(), TimeField::Known(_))
-                    && !matches!(roles.publication_time(), TimeField::NotApplicable)
-            }
-            TemporalProfile::Announcement => {
-                matches!(roles.effective_time(), TimeField::Known(_))
-                    && !matches!(roles.publication_time(), TimeField::NotApplicable)
-            }
-            TemporalProfile::DerivedRecord => {
-                matches!(roles.event_time(), TimeField::Known(_))
-                    || matches!(roles.observation_time(), TimeField::Known(_))
-            }
-            TemporalProfile::SampledObservation => true,
-        };
-        if !profile_matches {
+        if crate::model::check_profile_roles(
+            parts.profile,
+            roles.event_time(),
+            roles.observation_time(),
+            roles.publication_time(),
+            roles.effective_time(),
+        )
+        .is_err()
+        {
             return Err(PitError::ContextMismatch);
         }
         if let Some(interval) = parts.effective_interval

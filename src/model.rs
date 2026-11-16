@@ -56,27 +56,13 @@ impl TemporalDraft {
             TimeField::Unknown => return Err(TemporalError::MissingRequiredRole),
             TimeField::NotApplicable => return Err(TemporalError::RoleNotApplicable),
         };
-        match profile {
-            TemporalProfile::EventRecord => {
-                require_known(&self.event_time)?;
-            }
-            TemporalProfile::PublishedObservation => {
-                require_known(&self.observation_time)?;
-                require_applicable(&self.publication_time)?;
-            }
-            TemporalProfile::Announcement => {
-                require_known(&self.effective_time)?;
-                require_applicable(&self.publication_time)?;
-            }
-            TemporalProfile::DerivedRecord => {
-                if !matches!(self.event_time, TimeField::Known(_))
-                    && !matches!(self.observation_time, TimeField::Known(_))
-                {
-                    return Err(TemporalError::MissingRequiredRole);
-                }
-            }
-            TemporalProfile::SampledObservation => {}
-        }
+        check_profile_roles(
+            profile,
+            &self.event_time,
+            &self.observation_time,
+            &self.publication_time,
+            &self.effective_time,
+        )?;
         Ok(Temporal {
             event_time: self.event_time,
             observation_time: self.observation_time,
@@ -87,6 +73,39 @@ impl TemporalDraft {
             profile,
         })
     }
+}
+
+/// profile 与四个固有角色（不含接收）的组合规则；`TemporalDraft::validate`
+/// 与 `FactVersionRef::try_new` 共用同一份判定，避免两处漂移。
+pub(crate) fn check_profile_roles(
+    profile: TemporalProfile,
+    event_time: &TimeField<UnixTimeNs>,
+    observation_time: &TimeField<ObservationTime>,
+    publication_time: &TimeField<UnixTimeNs>,
+    effective_time: &TimeField<UnixTimeNs>,
+) -> Result<(), TemporalError> {
+    match profile {
+        TemporalProfile::EventRecord => {
+            require_known(event_time)?;
+        }
+        TemporalProfile::PublishedObservation => {
+            require_known(observation_time)?;
+            require_applicable(publication_time)?;
+        }
+        TemporalProfile::Announcement => {
+            require_known(effective_time)?;
+            require_applicable(publication_time)?;
+        }
+        TemporalProfile::DerivedRecord => {
+            if !matches!(event_time, TimeField::Known(_))
+                && !matches!(observation_time, TimeField::Known(_))
+            {
+                return Err(TemporalError::MissingRequiredRole);
+            }
+        }
+        TemporalProfile::SampledObservation => {}
+    }
+    Ok(())
 }
 
 fn require_known<T>(field: &TimeField<T>) -> Result<(), TemporalError> {
