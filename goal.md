@@ -5,7 +5,7 @@
 | 文档 ID | XH-TEMPORAL-GOAL-001 |
 | 文档版本 | 0.1.0 |
 | 整理日期 | 2026-09-27 |
-| 状态 | 历史整合版评审候选；替代 2026-09-26 的文档提案，不表示已获审批、已实现或已验收 |
+| 状态 | 目标正本；crate 已有 0.1.0 实现（tag `v0.1.0`）。目标完成判据的验收证据登记见 [checklist.md](checklist.md)，本文件不预勾选 |
 | 配套规格 | [spec.md](spec.md)，XH-TEMPORAL-SPEC-001 v0.1.0 |
 | 模块 | `temporal`，独立 Rust crate、独立 Git 仓库 |
 | 建议仓库归属 | `bytechainx/temporal`；本交付不创建或确认该远端仓库 |
