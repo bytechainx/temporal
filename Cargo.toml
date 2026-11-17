@@ -1,6 +1,6 @@
 [package]
 name = "temporal"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 description = "独立时间值对象与历史可见性规则模块"
