@@ -92,8 +92,8 @@ pub use pit::effective::{
     select_effective_state_as_of,
 };
 pub use pit::selection::{
-    FactOutcome, PitManifestRef, PitResult, QueryInputRef, SelectedEvidenceRef, select_fact_as_of,
-    select_facts_as_of,
+    FactFailureRef, FactOutcome, PitManifestRef, PitPartialResult, PitResult, QueryInputRef,
+    SelectedEvidenceRef, select_fact_as_of, select_facts_as_of, select_facts_as_of_partial,
 };
 pub use pit::visibility::{DecisionReason, VisibilityDecision, evaluate_visibility};
 pub use precision::{

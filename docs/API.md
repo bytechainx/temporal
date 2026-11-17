@@ -46,6 +46,7 @@
 | `evaluate_visibility(version, context)` | 单版本 `Visible` / `NotVisible` / `Indeterminate`；不宣称该事实的最新修订 |
 | `select_fact_as_of(candidates, coverage, context)` | 单事实 `Selected` / `Withdrawn` / `NoVisibleVersion`，不确定性经 `PitError` 返回 |
 | `select_facts_as_of(input, context)` | 同一 `authority_scope` 的完整事实集合，按完整键字节稳定排序 |
+| `select_facts_as_of_partial(input, context)` | 同严格入口输入；事实级失败进 `failures` 显式枚举并按键排序，非空即结果不完整，查询级错误仍 `Err` |
 | `inspect_candidates(input, context)` | 独立的 `AdministrativeDiagnostics`；显式请求、有界，可能含未来版本身份，只供行政审计 |
 | `select_effective_state_as_of(input, context, valid_at, state_policy)` | 先完成严格 PIT，再计算业务有效状态；不自动化解重叠冲突 |
 
