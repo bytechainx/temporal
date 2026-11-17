@@ -750,6 +750,8 @@ Sequence 模式对可见、合法且相同 order_scope 的版本取最大 ordina
 
 `select_facts_as_of` 对已声明完整作用域提供严格结果；任一潜在影响完整性的错误返回 Err，不附一份可被误认完整的成功列表。调用方可以主动拆分独立事实分别查询，但不能将混合状态包装为“全部成功”。
 
+`select_facts_as_of_partial` 提供同一输入的事实级失败粒度：可归属于单个完整 FactKey 的错误（上下文不匹配、修订冲突、顺序不可比或歧义、链非法、选版不确定、单版本可见性评估失败、组内选择失败）记入 `failures` 并按事实键规范序返回，其余事实照常给出结果；覆盖声明、资源上限、证据身份去重等查询级错误仍整体返回 Err。`failures` 非空即表示结果不完整，调用方必须检查后再使用 `outcomes`，不得把部分结果当作全量答案。每个事实键只记录按处理顺序的首个失败原因。
+
 ### 14.6 伪代码
 
 ```text
@@ -1070,6 +1072,7 @@ DigestRef 至少有算法/编码版本和摘要字节，PayloadRef 有存储引�
 | `evaluate_visibility(version, context)` | Result<VisibilityDecision, PitError> | 只评估本版；不声明全组最新 |
 | `select_fact_as_of(candidates, coverage, context)` | Result<FactOutcome, PitError> | 单一 authority_scope + 完整 FactKey；跨作用域或跨事实输入拒绝 |
 | `select_facts_as_of(input, context)` | Result<PitResult, PitError> | 单一完整 authority_scope 内的事实集合；严格全量结果 |
+| `select_facts_as_of_partial(input, context)` | Result<PitPartialResult, PitError> | 同严格入口输入；事实级错误进 `failures` 显式枚举，查询级错误仍 Err |
 | `inspect_candidates(input, context)` | Result<AdministrativeDiagnostics, PitError> | 显式、数量有界的行政诊断；含未来候选身份，不能进入决策输入 |
 | `select_effective_state_as_of(input, context, valid_at, state_policy)` | Result<EffectiveStateResult, PitError> | 先 PIT、后状态；重叠冲突拒绝 |
 | `verify_projection(authoritative, projected, precision, policy)` | Result<(), PrecisionError> | 对齐与明确舍入一致 |
@@ -1955,6 +1958,7 @@ M0 固定契约/Owner/消费者；M1 独立基础；M2 模型/证据；M3 PIT；
 | TP-T178 | 兼容候选回滚 | temporal/product/schema/mapping不同版本组合 | 只认可已验收闭包；固定快照重现，不暗换解释 | Governance / Platform | TP-INV-023, TP-INV-051 |
 | TP-T179 | 冻结参数与Owner缺失 | 资源预算/映射证据/消费者Owner等发布必需项未定 | 关联任务Blocked，不默认值补齐后伪称验收完成 | Governance | TP-INV-054, TP-INV-055 |
 | TP-T180 | 文档检查不冒充实现 | 仅本MD结构检查或外部参考算术检查通过 | Rust/协议/集成场景仍NOT_RUN；不宣称180项行为通过 | Governance | TP-INV-035, TP-INV-055 |
+| TP-T181 | 批量宽松入口的失败归属 | 一个事实组内出现选版不确定或修订冲突，另一事实正常 | `failures` 按事实键规范序枚举失败事实与首个失败原因，`outcomes` 只含成功组；覆盖/资源等查询级错误仍整体 Err | temporal | TP-INV-020, TP-INV-021 |
 
 ### 33.8 目标到新增场景追踪
 

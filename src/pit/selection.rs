@@ -120,10 +120,51 @@ pub fn select_facts_as_of<'a>(
     select_impl(input, context)
 }
 
-fn select_impl<'a>(
+/// 一个事实级失败：失败归属于声明的事实键，调用方必须检查后再使用结果。
+#[derive(Debug, Clone, Copy)]
+pub struct FactFailureRef<'a> {
+    /// 失败事实的完整键。
+    pub fact_key: FactKeyRef<'a>,
+    /// 该事实组内首个确定性失败原因。
+    pub error: PitError,
+}
+
+/// 允许事实级失败的批量 PIT 结果；`failures` 非空即结果不完整。
+#[derive(Debug, Clone)]
+pub struct PitPartialResult<'a> {
+    /// 成功组的确定性结果，按事实键规范序排列。
+    pub outcomes: Vec<FactOutcome<'a>>,
+    /// 失败组的事实键与首个失败原因，按事实键规范序排列。
+    pub failures: Vec<FactFailureRef<'a>>,
+    /// 决策安全的复现上下文与输入覆盖声明引用。
+    pub manifest: PitManifestRef<'a>,
+}
+
+/// 单一权威作用域内所有声明事实的宽松 PIT 选版。
+///
+/// 与 [`select_facts_as_of`] 的差别只在失败粒度：可归属于单个事实键的
+/// 错误进入 `failures`，其余事实照常选版；查询级错误（覆盖声明、资源
+/// 上限、证据身份去重等）仍整体返回 `Err`。`failures` 非空表示结果
+/// 不完整，调用方不得把 `outcomes` 当作全量答案。
+pub fn select_facts_as_of_partial<'a>(
     input: QueryInputRef<'a>,
     context: AsOfContext<'a>,
-) -> Result<PitResult<'a>, PitError> {
+) -> Result<PitPartialResult<'a>, PitError> {
+    if context.policy().output_scope() != OutputScope::AllFacts {
+        return Err(PitError::ContextMismatch);
+    }
+    select_impl_partial(input, context)
+}
+
+struct PreparedQuery<'a> {
+    keys: Vec<FactKeyRef<'a>>,
+    ordered: Vec<FactVersionRef<'a>>,
+}
+
+fn prepare_query<'a>(
+    input: QueryInputRef<'a>,
+    context: AsOfContext<'a>,
+) -> Result<PreparedQuery<'a>, PitError> {
     input.coverage.validate_for(context)?;
     let limits = context.policy().limits();
     validate_query_limits(input, context)?;
@@ -179,13 +220,22 @@ fn select_impl<'a>(
                     .cmp(&right.source_evidence().map(|e| e.proof().evidence_id()))
             })
     });
+    Ok(PreparedQuery { keys, ordered })
+}
+
+fn select_impl<'a>(
+    input: QueryInputRef<'a>,
+    context: AsOfContext<'a>,
+) -> Result<PitResult<'a>, PitError> {
+    let PreparedQuery { keys, ordered } = prepare_query(input, context)?;
+    let limits = context.policy().limits();
     let mut visible = Vec::new();
     visible
-        .try_reserve_exact(input.candidates.len())
+        .try_reserve_exact(ordered.len())
         .map_err(|_| PitError::ResourceUnavailable)?;
     let mut uncertain = Vec::new();
     uncertain
-        .try_reserve_exact(input.candidates.len())
+        .try_reserve_exact(ordered.len())
         .map_err(|_| PitError::ResourceUnavailable)?;
     let mut prior_key = None;
     let mut versions_for_key = 0;
@@ -255,6 +305,128 @@ fn select_impl<'a>(
     }
     Ok(PitResult {
         outcomes,
+        manifest: PitManifestRef {
+            context,
+            coverage_manifest_ref: input.coverage.manifest_ref(),
+            coverage_adapter_ref: input.coverage.adapter_ref(),
+            coverage_acceptance_ref: input.coverage.acceptance_ref(),
+        },
+    })
+}
+
+fn select_impl_partial<'a>(
+    input: QueryInputRef<'a>,
+    context: AsOfContext<'a>,
+) -> Result<PitPartialResult<'a>, PitError> {
+    let PreparedQuery { keys, ordered } = prepare_query(input, context)?;
+    let limits = context.policy().limits();
+    // 事实键字节 → (事实键引用, 首个失败原因)；BTreeMap 序即规范序。
+    let mut failed: std::collections::BTreeMap<&'a [u8], (FactKeyRef<'a>, PitError)> =
+        std::collections::BTreeMap::new();
+    let mut visible = Vec::new();
+    visible
+        .try_reserve_exact(ordered.len())
+        .map_err(|_| PitError::ResourceUnavailable)?;
+    let mut uncertain = Vec::new();
+    uncertain
+        .try_reserve_exact(ordered.len())
+        .map_err(|_| PitError::ResourceUnavailable)?;
+    let mut prior_key = None;
+    let mut versions_for_key = 0;
+    let mut prior_version = None;
+    for (index, &version) in ordered.iter().enumerate() {
+        if version.receipts().len() > limits.max_evidence_per_version()
+            || version.system_evidence().len() > limits.max_evidence_per_version()
+        {
+            return Err(PitError::LimitExceeded);
+        }
+        let identity = version.identity();
+        if index > 0
+            && revision_sort_key(ordered[index - 1]) == revision_sort_key(version)
+            && prior_version.is_some_and(|previous| !same_revision_content(previous, version))
+        {
+            failed
+                .entry(identity.fact_key().as_bytes())
+                .or_insert((identity.fact_key(), PitError::ConflictingRevision));
+        }
+        prior_version = Some(version);
+        if prior_key != Some(identity.fact_key()) {
+            prior_key = Some(identity.fact_key());
+            versions_for_key = 0;
+        }
+        versions_for_key += 1;
+        if versions_for_key > limits.max_versions_per_fact() {
+            return Err(PitError::LimitExceeded);
+        }
+        if identity.authority_scope() != context.authority_scope()
+            || keys
+                .binary_search_by(|item| item.as_bytes().cmp(identity.fact_key().as_bytes()))
+                .is_err()
+        {
+            failed
+                .entry(identity.fact_key().as_bytes())
+                .or_insert((identity.fact_key(), PitError::ContextMismatch));
+            continue;
+        }
+        match evaluate_visibility(version, context) {
+            Ok(VisibilityDecision::Visible) => visible.push(version),
+            Ok(VisibilityDecision::NotVisible(_)) => {}
+            Ok(VisibilityDecision::Indeterminate(_)) => uncertain.push(version),
+            Err(error) => {
+                failed
+                    .entry(identity.fact_key().as_bytes())
+                    .or_insert((identity.fact_key(), error));
+            }
+        }
+    }
+    let mut visible_index = 0;
+    for unknown in uncertain {
+        while visible_index < visible.len()
+            && revision_sort_key(visible[visible_index]) < revision_sort_key(unknown)
+        {
+            visible_index += 1;
+        }
+        let identity = unknown.identity();
+        if visible_index >= visible.len()
+            || revision_sort_key(visible[visible_index]) != revision_sort_key(unknown)
+        {
+            failed
+                .entry(identity.fact_key().as_bytes())
+                .or_insert((identity.fact_key(), PitError::IndeterminateSelection));
+            continue;
+        }
+        if !same_revision_content(visible[visible_index], unknown) {
+            failed
+                .entry(identity.fact_key().as_bytes())
+                .or_insert((identity.fact_key(), PitError::ConflictingRevision));
+        }
+    }
+    let mut outcomes = Vec::new();
+    outcomes
+        .try_reserve_exact(keys.len())
+        .map_err(|_| PitError::ResourceUnavailable)?;
+    let mut offset = 0;
+    for key in keys {
+        let begin = offset;
+        while offset < visible.len() && visible[offset].identity().fact_key() == key {
+            offset += 1;
+        }
+        if failed.contains_key(key.as_bytes()) {
+            continue;
+        }
+        match select_group(&visible[begin..offset], key, context) {
+            Ok(outcome) => outcomes.push(outcome),
+            Err(error) => {
+                failed.insert(key.as_bytes(), (key, error));
+            }
+        }
+    }
+    Ok(PitPartialResult {
+        outcomes,
+        failures: failed
+            .into_values()
+            .map(|(fact_key, error)| FactFailureRef { fact_key, error })
+            .collect(),
         manifest: PitManifestRef {
             context,
             coverage_manifest_ref: input.coverage.manifest_ref(),

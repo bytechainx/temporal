@@ -9,7 +9,7 @@ use temporal::{
     SourceReleaseRequirement, SourceVisibilityEvidenceRef, SystemKnowledgeCutRef,
     SystemVisibilityEvidenceRef, TemporalDraft, TemporalProfile, TimeBounds, TimeField,
     TimeQuality, UnixTimeNs, VisibilityDecision, evaluate_visibility, inspect_candidates,
-    select_fact_as_of, select_facts_as_of,
+    select_fact_as_of, select_facts_as_of, select_facts_as_of_partial,
 };
 
 fn time(value: i64) -> UnixTimeNs {
@@ -1179,4 +1179,155 @@ fn tp_t116_working_budget_rejects_before_allocating_selection_index() {
     let reserve_unavailable = PitError::ResourceUnavailable;
     let over_quota = PitError::LimitExceeded;
     assert_ne!(reserve_unavailable, over_quota);
+}
+
+#[test]
+fn tp_partial_ambiguous_fact_fails_only_its_key() {
+    let good = version(b"a", b"v1", 1, 10, RevisionOperation::Upsert);
+    let first = version(b"b", b"v1", 1, 10, RevisionOperation::Upsert);
+    let second = version(b"b", b"v2", 1, 11, RevisionOperation::Upsert);
+    let keys = [good.identity().fact_key(), first.identity().fact_key()];
+    let ctx = context(
+        20,
+        OutputScope::AllFacts,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    let candidates = [second, good, first];
+    let input = QueryInputRef {
+        candidates: &candidates,
+        coverage: coverage(&keys, 20, CoverageState::Complete),
+    };
+    assert!(matches!(
+        select_facts_as_of(input, ctx),
+        Err(PitError::AmbiguousRevisionOrder)
+    ));
+    let partial = select_facts_as_of_partial(input, ctx).unwrap();
+    assert_eq!(partial.outcomes.len(), 1);
+    assert!(
+        matches!(partial.outcomes[0], FactOutcome::Selected { version, .. } if version.fact_key().as_bytes() == b"a")
+    );
+    assert_eq!(partial.failures.len(), 1);
+    assert_eq!(partial.failures[0].fact_key.as_bytes(), b"b");
+    assert_eq!(partial.failures[0].error, PitError::AmbiguousRevisionOrder);
+    assert_eq!(partial.manifest.coverage_manifest_ref, "coverage1");
+}
+
+#[test]
+fn tp_partial_indeterminate_fact_isolated_from_batch() {
+    let good = version(b"a", b"v1", 1, 10, RevisionOperation::Upsert);
+    let old = version(b"b", b"v1", 1, 10, RevisionOperation::Upsert);
+    let uncertain = version_bounds(b"b", b"v2", 2, 20, 15, 25, RevisionOperation::Upsert);
+    let keys = [good.identity().fact_key(), old.identity().fact_key()];
+    let ctx = context(
+        20,
+        OutputScope::AllFacts,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    let candidates = [good, old, uncertain];
+    let input = QueryInputRef {
+        candidates: &candidates,
+        coverage: coverage(&keys, 20, CoverageState::Complete),
+    };
+    assert!(matches!(
+        select_facts_as_of(input, ctx),
+        Err(PitError::IndeterminateSelection)
+    ));
+    let partial = select_facts_as_of_partial(input, ctx).unwrap();
+    assert_eq!(partial.outcomes.len(), 1);
+    assert!(
+        matches!(partial.outcomes[0], FactOutcome::Selected { version, .. } if version.fact_key().as_bytes() == b"a")
+    );
+    assert_eq!(partial.failures.len(), 1);
+    assert_eq!(partial.failures[0].fact_key.as_bytes(), b"b");
+    assert_eq!(partial.failures[0].error, PitError::IndeterminateSelection);
+}
+
+#[test]
+fn tp_partial_failures_are_sorted_and_undeclared_keys_fail_their_own_key() {
+    // z 事实序数冲突、a 事实序数冲突：failures 必须按事实键规范序而非候选序。
+    let z1 = version(b"z", b"v1", 1, 10, RevisionOperation::Upsert);
+    let z2 = version(b"z", b"v2", 1, 11, RevisionOperation::Upsert);
+    let a1 = version(b"a", b"v1", 1, 10, RevisionOperation::Upsert);
+    let a2 = version(b"a", b"v2", 1, 11, RevisionOperation::Upsert);
+    let keys = [a1.identity().fact_key(), z1.identity().fact_key()];
+    let ctx = context(
+        20,
+        OutputScope::AllFacts,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    let candidates = [z2, a2, z1, a1];
+    let partial = select_facts_as_of_partial(
+        QueryInputRef {
+            candidates: &candidates,
+            coverage: coverage(&keys, 20, CoverageState::Complete),
+        },
+        ctx,
+    )
+    .unwrap();
+    assert!(partial.outcomes.is_empty());
+    assert_eq!(partial.failures.len(), 2);
+    assert_eq!(partial.failures[0].fact_key.as_bytes(), b"a");
+    assert_eq!(partial.failures[1].fact_key.as_bytes(), b"z");
+
+    // 覆盖未声明的候选键：严格整批 ContextMismatch；宽松只让该键失败。
+    let good = version(b"g", b"v1", 1, 10, RevisionOperation::Upsert);
+    let stray = version(b"stray", b"v1", 1, 10, RevisionOperation::Upsert);
+    let good_keys = [good.identity().fact_key()];
+    let mixed = [good, stray];
+    let input = QueryInputRef {
+        candidates: &mixed,
+        coverage: coverage(&good_keys, 20, CoverageState::Complete),
+    };
+    assert!(matches!(
+        select_facts_as_of(input, ctx),
+        Err(PitError::ContextMismatch)
+    ));
+    let partial = select_facts_as_of_partial(input, ctx).unwrap();
+    assert_eq!(partial.outcomes.len(), 1);
+    assert!(
+        matches!(partial.outcomes[0], FactOutcome::Selected { version, .. } if version.fact_key().as_bytes() == b"g")
+    );
+    assert_eq!(partial.failures.len(), 1);
+    assert_eq!(partial.failures[0].fact_key.as_bytes(), b"stray");
+    assert_eq!(partial.failures[0].error, PitError::ContextMismatch);
+}
+
+#[test]
+fn tp_partial_query_level_errors_still_fail_closed() {
+    let a = version(b"a", b"v1", 1, 10, RevisionOperation::Upsert);
+    let b = version(b"b", b"v1", 1, 10, RevisionOperation::Upsert);
+    let keys = [a.identity().fact_key(), b.identity().fact_key()];
+    let candidates = [a, b];
+    let ctx = context(
+        20,
+        OutputScope::AllFacts,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    // 覆盖不完整：查询级错误，宽松入口同样整体 Err。
+    assert!(matches!(
+        select_facts_as_of_partial(
+            QueryInputRef {
+                candidates: &candidates,
+                coverage: coverage(&keys, 20, CoverageState::Incomplete),
+            },
+            ctx
+        ),
+        Err(PitError::IncompleteCandidateSet)
+    ));
+    // SingleFact scope：入口合同不符，整体 Err。
+    let single = context(
+        20,
+        OutputScope::SingleFact,
+        RevisionOrderPolicy::AuthoritativeSequence,
+    );
+    assert!(matches!(
+        select_facts_as_of_partial(
+            QueryInputRef {
+                candidates: &candidates,
+                coverage: coverage(&keys, 20, CoverageState::Complete),
+            },
+            single
+        ),
+        Err(PitError::ContextMismatch)
+    ));
 }
