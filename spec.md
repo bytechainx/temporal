@@ -5,7 +5,7 @@
 | 文档 ID | XH-TEMPORAL-SPEC-001 |
 | 文档版本 | 0.1.0 |
 | 整理日期 | 2026-09-27 |
-| 状态 | 历史整合版评审候选；新 API 与接入规则均为目标合同，无实现、编译或生产验收声明 |
+| 状态 | 行为合同正本；crate 已有 0.1.0 实现（tag `v0.1.0`）。本文件不登记实现证据；行为验收以 [checklist.md](checklist.md) 的 Owner 证据为准，生产就绪以真实证据判定 |
 | 对应目标 | [goal.md](goal.md)，XH-TEMPORAL-GOAL-001 v0.1.0 |
 | 模块 | 独立 Rust crate `temporal`；建议归属 `bytechainx/temporal` |
 | 历史迁移基线 | kernel `0c895cbf8ce22f5435dd93d5f53eb03eeb57eb2f`，package 0.4.2 |
