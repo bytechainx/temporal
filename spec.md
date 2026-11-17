@@ -3,10 +3,10 @@
 | 元数据 | 内容 |
 | --- | --- |
 | 文档 ID | XH-TEMPORAL-SPEC-001 |
-| 文档版本 | 0.1.0 |
+| 文档版本 | 0.1.1 |
 | 整理日期 | 2026-09-27 |
 | 状态 | 行为合同正本；crate 已有 0.1.0 实现（tag `v0.1.0`）。本文件不登记实现证据；行为验收以 [checklist.md](checklist.md) 的 Owner 证据为准，生产就绪以真实证据判定 |
-| 对应目标 | [goal.md](goal.md)，XH-TEMPORAL-GOAL-001 v0.1.0 |
+| 对应目标 | [goal.md](goal.md)，XH-TEMPORAL-GOAL-001 v0.1.1 |
 | 模块 | 独立 Rust crate `temporal`；建议归属 `bytechainx/temporal` |
 | 历史迁移基线 | kernel `0c895cbf8ce22f5435dd93d5f53eb03eeb57eb2f`，package 0.4.2 |
 | 技术基线 | Edition 2024；MSRV 1.88；std；生产依赖初始仅 thiserror 2 |
@@ -42,7 +42,7 @@
 | 21 | [并发、资源、性能与安全边界](#s21) |
 | 22 | [必须实现的验收测试矩阵](#s22) |
 | 23 | [构建、测试与 CI 门禁](#s23) |
-| 24 | [从 kernel 迁移的实施合同](#s24) |
+| 24 | [本版移除（编号保留）](#s24) |
 | 25 | [交付证据、版本政策与完成定义](#s25) |
 | 26 | [目标追踪与实施工作包](#s26) |
 | 27 | [历史约束对账与统一术语](#s27) |
@@ -1124,7 +1124,7 @@ source_scope 是时间可见性作用域，不是授权票据。消费方仍须�
 
 ## 22. 必须实现的验收测试矩阵
 
-本版共 180 个必选验收场景：本章保留 TP-T001–TP-T120，§33 补充 TP-T121–TP-T180。它们是需要落地的合同场景，不是本次已经运行的 Rust 测试。其中消费方适配、调度、存储及回测测试由对应消费仓执行；本仓只承担自身能力和纯合同 fixture，具体归属见 §32–33。初始执行状态全部为 `NOT_RUN`；实现时须映射具体测试函数、断言、工具链和日志。一个场景可拆成多个测试函数，但不得只用测试名或源码字符串证明行为。
+本版共 181 个跨 Owner 必选验收场景：本章保留 TP-T001–TP-T120，§33 补充 TP-T121–TP-T181。它们是需要落地的合同场景，不是本次已经运行的 Rust 测试。其中消费方适配、调度、存储及回测测试由对应消费仓执行；本仓只承担自身能力和纯合同 fixture，具体归属见 §32–33。temporal 独立验收分母为 143（temporal_only 128 项与 mixed 15 项）；其余 38 项纯消费方场景不在该分母内，归对应消费方另立 Goal。mixed 项按 temporal 纯 fixture 断言判定，不要求消费方集成证据。场景行 ID 全部保留，不删不重编号；TP-T181 为后增条目。初始执行状态全部为 `NOT_RUN`；实现时须映射具体测试函数、断言、工具链和日志。一个场景可拆成多个测试函数，但不得只用测试名或源码字符串证明行为。
 
 ### 22.1 独立性与公开 API
 
@@ -1362,60 +1362,19 @@ SystemTime 冒烟/平台精度测试不得要求所有 OS 都精确表示 -1ns�
 
 <a id="s24"></a>
 
-## 24. 从 kernel 迁移的实施合同
+## 24. 本版移除（编号保留）
 
-### 24.1 固定来源，不重新猜测最新 main
-
-迁移开始时读取实际最新 main 并记录 SHA，与本分析基线 `0c895cbf8ce22f5435dd93d5f53eb03eeb57eb2f` 做差异审查。本文的旧行为判断只针对固定基线，不能直接套用到之后修改的代码。
-
-源仓库基线是 kernel 0.4.2，含时间、生命周期与错误职责；新的 temporal 版本独立管理。[K1] 删除 kernel 时间公开项是破坏性变化，拟按 0.5.0 级别管理，不作为无破坏的 0.4.3 补丁。最终版本需经发布审批。[R7]
-
-### 24.2 代码与测试归属矩阵
-
-| 旧位置/内容 | 最终处置 |
-| --- | --- |
-| src/time/unix_time.rs | 迁往 temporal 的 UnixTimeNs/TimeError；单列负 epoch/精度新合同 |
-| src/time/clock.rs | 迁往 temporal 时钟接口与系统实现 |
-| src/time.rs 与根 time re-export | 在 temporal 重建明确公开面；从最终 kernel 删除 |
-| time_storage 通用单位/换算/能力 | 迁往 temporal precision；返回本地 PrecisionError |
-| verify_pg_dual_column | 移到实际 PostgreSQL 消费适配器，调用通用 verify_projection |
-| error.rs 的 From<TimeError> for XError | 删除；消费方显式适配 |
-| error.rs 中时间相关 compile_fail | 迁到 temporal，修复 import 并保留正向对照 |
-| 混合 clock_contract/public_api/api_compile 测试 | 按语义拆分，不整文件无差别搬迁 |
-| kernel::lifecycle、ShutdownSignal/Guard、WaitTimeoutError | 保留在 kernel |
-| kernel::XError.retry_after 的 std Duration | 保留；标准库时间长度不是 temporal 依赖 |
-| 原 bench/example/docs 中时间入口 | 分拆或修改；不得遗留声称旧 API 仍可用的样例 |
-
-### 24.3 必须独立审查的行为变化
-
-原 kernel 的负 SystemTime 输入和负 UnixTimeNs 转 SystemTime 会拒绝；temporal 目标允许平台支持的负值并严格检查精度。原 time_storage 返回 XError，目标返回本地结构化错误。新增 ExplicitFloor 和严格 projection 校验均是明确新行为。[K2] [K3]
-
-这些修改必须有新旧测试对照和 CHANGELOG。机械迁移 PR 不得把行为差异伪装成格式化；新包阶段性存在时，不允许同一个最终应用闭包同时引用两套来源不同的绝对时间新类型。
-
-### 24.4 多仓候选与合入顺序
-
-先固定 GOAL/SPEC/API，再实现独立基础和模型/PIT，之后在消费者组合候选中验证，最后清理 kernel。候选 manifest 记录每仓 SHA、Cargo.lock、schema、策略、fixture 和外部证据版本；元仓 SHA 不能代替实际代码闭包。
-
-main-first 是受信基线与候选管理，不代表直接修改保护分支。每仓各自 PR 和 required checks；跨仓集成通过不免除本仓检查，本仓通过不替代消费者集成。
-
-若确实无法同步迁移，兼容过渡需单独例外记录：Owner、允许的单向依赖、唯一类型身份方案、截止候选和移除条件。不得形成循环；不得默认留下永久 `kernel -> temporal` re-export。
-
-### 24.5 Git 消费合同
-
-正式消费只使用实际存在且审核过的 temporal Git 源与完整 commit，并记录消费者锁文件。未创建的建议仓库不提供假安装指令或虚构 rev。开发中的临时本地 patch 只用于候选调试，必须从独立性验收环境移除。[R4]
-
-保留 publish=false，不执行 cargo publish；cargo package 仅验证独立包内容与构建。不宣称 crates.io/docs.rs 已有发布。
+本章原承载迁移期实施合同。temporal 作为独立 crate 维护，本版移除该合同；章节编号 24 保留以维持下游追踪与锚点稳定，不再承载现行条款。相关历史事实见 [goal.md](goal.md) §13 与 [CHANGELOG.md](CHANGELOG.md)。
 
 <a id="s25"></a>
 
 ## 25. 交付证据、版本政策与完成定义
 
-### 25.1 三个互不替代的完成状态
+### 25.1 互不替代的完成状态
 
 | 完成状态 | 必须证明 |
 | --- | --- |
 | temporal 模块本版完成 | 本 SPEC 标为 temporal Owner 的 MUST 实现；本仓 Rust/平台/API/资源门禁通过；文档与代码一致；消费方条款不冒充本仓已实现 |
-| kernel 时间迁移完成 | 上项成立；已登记消费者迁移完成；旧公开项和依赖清理；双仓及组合候选通过 |
 | 业务系统 PIT 验收完成 | 上述规则真实接入产品数据与证据；后端/派生/回测结果对照通过；信任边界可解释 |
 
 任何一个不能由另一个状态推断。只有 Python 参考模型、文档检查或人工阅读不能令 Rust gate 变为 PASS。
@@ -1459,12 +1418,12 @@ PolicyRef 和 schema 版本独立于 crate SemVer：同一个 API 实现支持�
 | G-011 | §17 | TP-T101–TP-T106 | Derived integration |
 | G-012 | §21 | TP-T116–TP-T118 | Resource/performance |
 | G-013 | §19 | TP-T009、TP-T113–TP-T114 | Local errors |
-| G-014 | §24 | TP-T001–TP-T003、TP-T008、TP-T119 | Kernel migration |
+| G-014 | — | — | 本版移除（编号保留） |
 | G-015 | §22–23、§25 | TP-T010、TP-T050、TP-T119–TP-T120 | Gates/evidence |
 
 G-016–G-020 的新增工作包与测试追踪见 §33。每个工作包的 Issue 必须关联 GOAL、具体 SPEC 条款、测试 ID、影响仓库和验收证据。Draft/Spec/Code/Test/Evidence 不得只互相链接而缺少实际断言；修订范围、默认策略或保护边界变化必须重新评审。
 
-建议按 M0 契约、M1 独立基础、M2 模型证据、M3 PIT、M4 消费接线、M5 迁移收口交付。此表不是已创建的 GitHub 任务，也不授权自动合入或发布。
+建议按 M0 契约、M1 独立基础、M2 模型证据、M3 PIT、M4 消费接线、M5 收口交付。此表不是已创建的 GitHub 任务，也不授权自动合入或发布。
 
 <a id="s27"></a>
 
@@ -1477,7 +1436,7 @@ G-016–G-020 的新增工作包与测试追踪见 §33。每个工作包的 Iss
 | 历史输入 | 本版处理 | 权威位置 |
 | --- | --- | --- |
 | 六个时间角色 | 全部保留，区分 Unknown/NotApplicable；接收必须真实 | §7 |
-| 时间能力从 kernel 剥离 | 一个独立 temporal crate；最终两个仓库互不依赖 | §2、§24 |
+| 时间能力剥离 | 一个独立 temporal crate；最终两个仓库互不依赖 | §2、§34（历史对账） |
 | 元仓库 + 独立 crate | 不把源码搬回 workspace，不建立全仓 Cargo workspace | §2、§32 |
 | Market 主要 event + received | 真实事件保持该要求；没有源时刻的采样明确使用另一 profile | §7、§29 |
 | Macro 使用观测/发布/修订/生效 | 支持这些语义，不要求每一条记录所有角色均 Known | §6–7 |
@@ -1510,7 +1469,7 @@ G-016–G-020 的新增工作包与测试追踪见 §33。每个工作包的 Iss
 
 `temporal` 独立仓库的 `goal.md/spec.md` 拥有模块行为合同。`ZoneCNH/workspace` 可以登记模块、固定文档版本/摘要及跨仓采纳规则，但不得复制另一份可以单独改动的同级权威 SPEC。
 
-历史讨论提出的 `standards/temporal.md` 应是跨产品语义约束与采纳索引，引用 temporal 的已批准版本，并登记产品映射 Owner；它不是把源代码迁回 workspace 的理由。实际目录路径须以迁移时读取的元仓名册为准，本交付不宣称已创建该路径。已有 `specs/market_data/adapter` 内的供应商约束继续归其产品 Owner，不在 temporal 下重建 binance/okx 等平行目录。
+历史讨论提出的 `standards/temporal.md` 应是跨产品语义约束与采纳索引，引用 temporal 的已批准版本，并登记产品映射 Owner；它不是把源代码迁回 workspace 的理由。实际目录路径须以迁移时读取的元仓名册为准，本交付不宣称已创建该路径。已有 `specs/products/market_data/adapter` 内的供应商约束继续归其产品 Owner，不在 temporal 下重建 binance/okx 等平行目录。
 
 <a id="s28"></a>
 
@@ -1802,7 +1761,7 @@ seconds/nanos → i128(seconds) × 1_000_000_000 + nanos
 | Feature / backtest / model | PIT join、lineage、训练/部署可用性、实际与模拟模式隔离 | 用 today/latest 重算替代过去真实输入 |
 | workspace 治理 | 受信基线、模块名册、任务、规则、候选与跨仓证据登记 | 承载 crate 源码或成为构建前置 |
 
-§22 中 TP-T050、TP-T069、TP-T071–TP-T080、TP-T101–TP-T106、TP-T110、TP-T115、TP-T119 等包含真实产品边界的场景，必须分成 temporal 纯 fixture 断言与相应消费者集成证据。纯 fixture 通过只证明规则，不能替代外部证据真实性。其余场景若涉及编译/后端，也按实际能力 Owner 记录，禁止“写在 temporal/spec.md 所以全由 temporal 实现”。
+temporal 作为独立模块按所有权验收：temporal 独立验收分母为 143（§22 前言）。§22 中 TP-T050、TP-T069、TP-T071–TP-T080、TP-T101–TP-T106、TP-T110、TP-T115、TP-T119 等包含真实产品边界的场景，其 temporal 部分由本仓纯 fixture 断言验收；消费方集成证据归各消费方 Owner 另立 Goal，不作为 temporal 完成或验收条件，temporal 仓不持有也不要求该类证据。其余场景若涉及编译/后端，按实际能力 Owner 记录，禁止“写在 temporal/spec.md 所以全由 temporal 实现”。
 
 ### 32.2 显式配置和 QueryPolicy 生命周期
 
@@ -1853,7 +1812,7 @@ temporal 无后台线程、连接或队列，不需要 shutdown/flush/reconnect 
 
 ### 32.7 多仓采纳、回滚与阶段完成
 
-M0 固定契约/Owner/消费者；M1 独立基础；M2 模型/证据；M3 PIT；M4 消费接线；M5 kernel 清理。每阶段均登记真实代码 SHA、锁文件、策略、schema、mapping、fixture 和 required checks，不以文档日期或元仓 SHA 代替。
+M0 固定契约/Owner/消费者；M1 独立基础；M2 模型/证据；M3 PIT；M4 消费接线；M5 收口。每阶段均登记真实代码 SHA、锁文件、策略、schema、mapping、fixture 和 required checks，不以文档日期或元仓 SHA 代替。
 
 回滚必须选择已验证的兼容候选组合，并固定数据快照/解释规则。不能仅回滚 temporal 代码却继续使用语义已变的 DTO、缓存或 mapping，然后宣称重现成功。不可逆的数据覆盖或旧版删除不是库版本回滚能够恢复的。
 
@@ -1865,9 +1824,9 @@ M0 固定契约/Owner/消费者；M1 独立基础；M2 模型/证据；M3 PIT；
 
 ### 33.1 新增测试的证据归属
 
-以下 TP-T121–TP-T180 与 §22 的 120 项共同组成 180 项验收场景。所有执行状态初始为 **NOT_RUN**。Owner 为 temporal 的条目要求本仓 Rust 行为或编译证据；其他条目要求对应消费者仓库测试，必要时引用同一纯规则 fixture。
+以下 TP-T121–TP-T181 与 §22 的 120 项共同组成 181 项跨 Owner 验收场景。temporal 独立验收分母为 143（§22 前言）：Owner 为 temporal 的条目要求本仓 Rust 行为或编译证据；mixed 条目按 temporal 纯 fixture 证据判定，不要求消费方集成证据；38 个纯消费方条目归对应消费方另立 Goal，不在 temporal 分母内。所有执行状态初始为 **NOT_RUN**。
 
-表中 Adapter 指源/协议/存储适配器；Product 指 contracts/application；Runtime 指采集与运行时；Platform 指数据产品/回测/特征集成；Governance 指元仓候选与发布治理。多个 Owner 的条目必须拆分证据，不能互相代签。
+表中 Adapter 指源/协议/存储适配器；Product 指 contracts/application；Runtime 指采集与运行时；Platform 指数据产品/回测/特征集成；Governance 指元仓候选与发布治理。表中 Owner 标注场景的跨仓归属，不向 temporal 施加消费方证据义务；temporal 仓只登记本仓 fixture 证据，不代签也不要求消费方半证据。
 
 ### 33.2 窗口与行情语义
 
@@ -1957,7 +1916,7 @@ M0 固定契约/Owner/消费者；M1 独立基础；M2 模型/证据；M3 PIT；
 | TP-T177 | 独立外部消费 | 只检出temporal，外部crate消费公开API | 无父workspace/内部testkit/configx/gRPC依赖；单一类型身份 | temporal | TP-INV-001, TP-INV-033, TP-INV-050 |
 | TP-T178 | 兼容候选回滚 | temporal/product/schema/mapping不同版本组合 | 只认可已验收闭包；固定快照重现，不暗换解释 | Governance / Platform | TP-INV-023, TP-INV-051 |
 | TP-T179 | 冻结参数与Owner缺失 | 资源预算/映射证据/消费者Owner等发布必需项未定 | 关联任务Blocked，不默认值补齐后伪称验收完成 | Governance | TP-INV-054, TP-INV-055 |
-| TP-T180 | 文档检查不冒充实现 | 仅本MD结构检查或外部参考算术检查通过 | Rust/协议/集成场景仍NOT_RUN；不宣称180项行为通过 | Governance | TP-INV-035, TP-INV-055 |
+| TP-T180 | 文档检查不冒充实现 | 仅本MD结构检查或外部参考算术检查通过 | Rust/协议/集成场景仍NOT_RUN；不宣称181项行为通过 | Governance | TP-INV-035, TP-INV-055 |
 | TP-T181 | 批量宽松入口的失败归属 | 一个事实组内出现选版不确定或修订冲突，另一事实正常 | `failures` 按事实键规范序枚举失败事实与首个失败原因，`outcomes` 只含成功组；覆盖/资源等查询级错误仍整体 Err | temporal | TP-INV-020, TP-INV-021 |
 
 ### 33.8 目标到新增场景追踪
@@ -1970,7 +1929,7 @@ M0 固定契约/Owner/消费者；M1 独立基础；M2 模型/证据；M3 PIT；
 | G-019 | §8、§20、§31 | TP-T151–TP-T160、TP-T163、TP-T168 | wire/存储/查询差分；协议和后端适配器 |
 | G-020 | §5、§23–25、§32 | TP-T161–TP-T170、TP-T174、TP-T176–TP-T180 | 配置/边界/测试/候选；各Owner分层 |
 
-新增场景扩展 G-001–G-015 的边界覆盖，并不取消旧测试或更改其历史执行状态。测试实现应绑定唯一断言和真实证据，不要求为凑数量创建一百八十个空壳函数。
+新增场景扩展 G-001–G-015 的边界覆盖，并不取消旧测试或更改其历史执行状态。测试实现应绑定唯一断言和真实证据，不要求为凑数量创建一百八十一个空壳函数。
 
 ### 33.9 实施前必须冻结的参数
 
@@ -1980,7 +1939,7 @@ M0 固定契约/Owner/消费者；M1 独立基础；M2 模型/证据；M3 PIT；
 | --- | --- | --- |
 | temporal 实际仓库地址、LICENSE 和 CODEOWNERS | M0 | 维护者确认；不能把建议地址当已创建 |
 | 实际 kernel main SHA 与历史 SHA 差异 | M0 | kernel Owner审查；不以旧行为直接覆盖新代码 |
-| 完整消费者与公开入口清单 | M0，M5前收口 | 元仓登记；未知外部消费者不宣称全部迁移 |
+| 完整消费者与公开入口清单 | M0，M5前收口 | 元仓登记；未知外部消费者不宣称全部采纳 |
 | MSRV锁文件、stable具体版本、平台targets | M1 | 模块维护者；历史MSRV1.88为拟保留基线，不称最新版 |
 | 每查询候选/键/证据/链深/内存预算 | M3前 | 产品与模块维护者提供实际整数；未批准预算不运行生产查询 |
 | 来源字段/单位/尺度/精度/闭开规则证据 | 每源接入前 | Adapter Owner；缺失字段映射隔离，不猜测 |
@@ -2013,13 +1972,13 @@ M0 固定契约/Owner/消费者；M1 独立基础；M2 模型/证据；M3 PIT；
 | spec(1).md | 1.0.0 / 2026-09-26 | c10b29ce3d8852ffe1cb01a6d9f22e7ed84775cec539df5fc42bf7d891b86916 |
 | kernel-to-temporal-analysis.md | 2026-09-26 | db6a60c8dba6debf2a239de085dcac0c4922757e790433b676c7c811def64b0e |
 
-1.1.0 整合轮还记录了读取 `xhyper-data-platform-complete.md` / 同内容副本中 EventEnvelope、六角色、Market/Macro、早期 PIT 和订单簿段落，并检索历史讨论的独立模块、kernel剥离、市场采集/REST补齐、配置加载及测试时间约束。该历史输入用于确认需求，不充当今日供应商API或远端仓库状态证据。
+1.1.0 整合轮还记录了读取 来源工程文档 `data-platform-complete.md` / 同内容副本中 EventEnvelope、六角色、Market/Macro、早期 PIT 和订单簿段落，并检索历史讨论的独立模块、kernel剥离、市场采集/REST补齐、配置加载及测试时间约束。该历史输入用于确认需求，不充当今日供应商API或远端仓库状态证据。
 
 ### 34.2 历史代码事实与候选设计
 
-K1–K8 指向历史 kernel 固定提交 `0c895cbf8ce22f5435dd93d5f53eb03eeb57eb2f`。0.1.0 未重新读取远端最新 main，也未重新执行该提交的 Rust 测试；旧源码事实由上述剥离报告转引。开始迁移前必须按 §24、§33 重新固定实际候选并审查差异。
+K1–K8 指向历史 kernel 固定提交 `0c895cbf8ce22f5435dd93d5f53eb03eeb57eb2f`。0.1.0 未重新读取远端最新 main，也未重新执行该提交的 Rust 测试；旧源码事实由上述剥离报告转引。相关候选须按 §33 重新固定实际候选并审查差异。
 
-相对 1.0.0，候选新增的 Window/AbsoluteTimeRange、SampledObservation、消费方映射/补齐/wire/配置合同及60个场景均为拟议设计。0.1.0 在工作区元仓库隔离分支修订文档，没有上传或合入 temporal crate 源码，也没有证明任何实现完成。
+相对 1.0.0，候选新增的 Window/AbsoluteTimeRange、SampledObservation、消费方映射/补齐/wire/配置合同及60个场景均为拟议设计。0.1.0 初始规格整理轮只修订工作区文档；后续独立仓实现与合入证据见仓库 CHANGELOG 与合并记录，不据此宣称 181 个场景已整场验收。
 
 ### 34.3 外部官方技术资料
 
