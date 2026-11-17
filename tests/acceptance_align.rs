@@ -2643,8 +2643,9 @@ fn tp_t120_delivery_evidence_grading_not_claiming_production() {
     );
     assert!(!manifest.contains("crates.io"), "no crates.io promise");
     assert!(!manifest.contains("docs.rs"), "no docs.rs badge/promise");
-    // Rust/平台/集成 gate 仍 NOT_RUN：README 的本地门禁与验收检查表都声明
-    // 全部行为验收初始 NOT_RUN，不因文档检查通过而宣称生产完成。
+    // Rust/平台/集成 gate 不预先打勾：README 的本地门禁声明 publish=false，
+    // 验收检查表的勾选状态只能来自 Owner 裁定登记的证据（2026-11-16 裁定），
+    // 不因文档检查通过而宣称生产完成。
     let readme = include_str!("../README.md");
     assert!(
         readme.contains("publish = false"),
@@ -2654,11 +2655,11 @@ fn tp_t120_delivery_evidence_grading_not_claiming_production() {
         !readme.contains("crates.io") && !readme.contains("docs.rs"),
         "README must not provide crates.io/docs.rs links"
     );
-    // 检查表初始状态：全部行为验收 NOT_RUN（不预先打勾）。
+    // 检查表登记口径：状态以 2026-11-16 Owner 裁定与逐项证据为准。
     let checklist = include_str!("../checklist.md");
     assert!(
-        checklist.contains("初始状态：全部行为验收 NOT_RUN"),
-        "checklist must keep initial NOT_RUN state"
+        checklist.contains("2026-11-16 Owner 裁定"),
+        "checklist must cite the Owner ruling as status authority"
     );
     // goal.md 的验收口径：机器全绿不等于合入权。
     let goal = include_str!("../goal.md");
@@ -2666,7 +2667,7 @@ fn tp_t120_delivery_evidence_grading_not_claiming_production() {
         goal.contains("机器全绿不等于取得合入权"),
         "goal.md must keep the machine-green caveat"
     );
-    // 检查表中 TP-T119/T120 仍未勾选（Rust/平台/集成 gate 仍 NOT_RUN）。
+    // 检查表中 TP-T120 已按 U3 证据登记 PASS；未登记项仍为 NOT_RUN。
     let t120_line = checklist.lines().find(|line| line.contains("TP-T120"));
     assert!(
         t120_line.is_some(),
@@ -2674,12 +2675,8 @@ fn tp_t120_delivery_evidence_grading_not_claiming_production() {
     );
     let t120_line = t120_line.unwrap_or("");
     assert!(
-        t120_line.contains("- [ ]"),
-        "TP-T120 must remain unchecked: {t120_line}"
-    );
-    assert!(
-        t120_line.contains("NOT_RUN"),
-        "TP-T120 must be marked NOT_RUN: {t120_line}"
+        t120_line.contains("状态：PASS") && t120_line.contains("证据："),
+        "TP-T120 must carry registered PASS evidence: {t120_line}"
     );
 }
 
